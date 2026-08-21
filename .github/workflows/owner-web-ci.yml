@@ -1,0 +1,37 @@
+name: owner-web-ci
+
+on:
+  push:
+    branches: [main]
+    paths: ['owner-web/**', '.github/workflows/owner-web-ci.yml']
+  pull_request:
+    branches: [main]
+    paths: ['owner-web/**', '.github/workflows/owner-web-ci.yml']
+
+defaults:
+  run:
+    working-directory: owner-web
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: owner-web/package-lock.json
+
+      - run: npm ci
+
+      # esbuild/vite dev-server CVE (GHSA-67mh-4wv8-2f99) is a known, accepted
+      # finding — dev-server-only exposure, fix requires a Vite 8 major bump.
+      # See docs/ARCHITECTURE.md Phase 9 security review notes. Gate on
+      # production dependencies only so that finding doesn't fail every build.
+      - run: npm audit --omit=dev --audit-level=high
+
+      - run: npm test
+
+      - run: npm run build

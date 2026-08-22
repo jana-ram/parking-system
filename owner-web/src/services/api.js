@@ -5,7 +5,7 @@ import axios from 'axios'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5100'
 
 const api = axios.create({
-  baseURL: `${API_URL}/platform`,
+  baseURL: `${API_URL}/parking-api`,
   timeout: 15000,
 })
 
@@ -27,44 +27,44 @@ api.interceptors.response.use(
 )
 
 export const authAPI = {
-  login: (email, password) => api.post('/auth/login', { email, password }),
+  login: (email, password) => api.post('/platform/auth/login', { email, password }),
 }
 
 export const countryAPI = {
-  list: () => api.get('/countries'),
-  create: (data) => api.post('/countries', data),
+  list: () => api.get('/platform/countries'),
+  create: (data) => api.post('/platform/countries', data),
 }
 
 export const organizationAPI = {
-  list: () => api.get('/organizations'),
-  get: (id) => api.get(`/organizations/${id}`),
-  create: (data) => api.post('/organizations', data),
-  updateStatus: (id, status) => api.patch(`/organizations/${id}/status`, { status }),
+  list: () => api.get('/platform/organizations'),
+  get: (id) => api.get(`/platform/organizations/${id}`),
+  create: (data) => api.post('/platform/organizations', data),
+  updateStatus: (id, status) => api.patch(`/platform/organizations/${id}/status`, { status }),
 }
 
 export const locationAPI = {
-  list: () => api.get('/locations'),
+  list: () => api.get('/platform/locations'),
 }
 
 export const deviceAPI = {
-  list: () => api.get('/devices'),
-  deactivate: (id, reason) => api.post(`/devices/${id}/deactivate`, { reason }),
+  list: () => api.get('/platform/devices'),
+  deactivate: (id, reason) => api.post(`/platform/devices/${id}/deactivate`, { reason }),
 }
 
 export const anomalyAPI = {
-  list: (riskLevel) => api.get('/anomalies', { params: riskLevel ? { riskLevel } : undefined }),
+  list: (riskLevel) => api.get('/platform/anomalies', { params: riskLevel ? { riskLevel } : undefined }),
 }
 
 export const incidentAPI = {
-  list: (params) => api.get('/incidents', { params }),
+  list: (params) => api.get('/platform/incidents', { params }),
 }
 
 export const auditAPI = {
-  list: (params) => api.get('/audit', { params }),
+  list: (params) => api.get('/platform/audit', { params }),
 }
 
 export const analyticsAPI = {
-  overview: () => api.get('/analytics/overview'),
+  overview: () => api.get('/platform/analytics/overview'),
 }
 
 export default api

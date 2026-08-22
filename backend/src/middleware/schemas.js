@@ -79,6 +79,19 @@ const updateStaff = Joi.object({
   status: Joi.string().valid('ACTIVE', 'SUSPENDED'),
 }).min(1)
 
+// Self-service profile edit (PATCH /staff/me) — deliberately a NARROWER
+// surface than updateStaff above: no role, no status. Changing either of
+// those is an authorization decision about someone else's account, not a
+// profile edit, and stays exclusive to the ORG_ADMIN-only PATCH /staff/:id.
+// newPassword requires currentPassword so a stolen/left-open session can't
+// silently lock the real owner out of their own account.
+const updateOwnStaff = Joi.object({
+  name: Joi.string().trim().min(2).max(120),
+  email: Joi.string().trim().lowercase().email().allow('', null),
+  currentPassword: Joi.string().when('newPassword', { is: Joi.exist(), then: Joi.required() }),
+  newPassword: Joi.string().min(6),
+}).min(1)
+
 // ── Device (§28, §N) ─────────────────────────────────────────────────────
 const registerDevice = Joi.object({
   locationId: Joi.string().hex().length(24).allow(null),
@@ -232,6 +245,7 @@ module.exports = {
   updateLocation,
   createStaff,
   updateStaff,
+  updateOwnStaff,
   registerDevice,
   deactivateDevice,
   createVehicleType,

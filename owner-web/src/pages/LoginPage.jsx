@@ -15,7 +15,7 @@ export default function LoginPage() {
     e.preventDefault()
     setLoading(true)
     try {
-      const { data } = await api.post('/auth/login', { email, password })
+      const { data } = await api.post('/platform/auth/login', { email, password })
       login(data.data.token, data.data.admin)
       navigate('/overview')
     } catch (err) {

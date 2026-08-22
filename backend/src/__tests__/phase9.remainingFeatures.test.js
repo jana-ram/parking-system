@@ -204,6 +204,57 @@ describe('GET /reports/summary (§36)', () => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════
+describe('GET/PATCH /staff/me — self-service profile (mobile Profile screen had nothing to call before this)', () => {
+  test('a STAFF account can view and edit their own name/email without needing an Org Admin', async () => {
+    const { token: staffToken } = await createStaffAndLogin('9300000050', 'Selfy')
+
+    const meRes = await signedReq(app, 'get', '/staff/me', { token: staffToken, deviceUuid, deviceSecret })
+    expect(meRes.status).toBe(200)
+    expect(meRes.body.data.staff.name).toBe('Selfy')
+    expect(meRes.body.data.staff.role).toBe('STAFF')
+
+    const updateRes = await signedReq(app, 'patch', '/staff/me', {
+      token: staffToken, deviceUuid, deviceSecret, body: { name: 'Selfy Updated', email: 'selfy@test.com' },
+    })
+    expect(updateRes.status).toBe(200)
+    expect(updateRes.body.data.staff.name).toBe('Selfy Updated')
+    expect(updateRes.body.data.staff.email).toBe('selfy@test.com')
+  })
+
+  test('cannot self-promote role or reactivate status through PATCH /staff/me — those fields are rejected outright', async () => {
+    const { token: staffToken } = await createStaffAndLogin('9300000051', 'Wannabe Admin')
+    const res = await signedReq(app, 'patch', '/staff/me', {
+      token: staffToken, deviceUuid, deviceSecret, body: { role: 'ORG_ADMIN' },
+    })
+    expect(res.status).toBe(422)
+  })
+
+  test('changing your own password requires the correct currentPassword', async () => {
+    const { token: staffToken } = await createStaffAndLogin('9300000052', 'Pw Changer')
+
+    const missingCurrent = await signedReq(app, 'patch', '/staff/me', {
+      token: staffToken, deviceUuid, deviceSecret, body: { newPassword: 'NewPass@123' },
+    })
+    expect(missingCurrent.status).toBe(422)
+
+    const wrongCurrent = await signedReq(app, 'patch', '/staff/me', {
+      token: staffToken, deviceUuid, deviceSecret, body: { currentPassword: 'WrongOne@123', newPassword: 'NewPass@123' },
+    })
+    expect(wrongCurrent.status).toBe(401)
+
+    const correct = await signedReq(app, 'patch', '/staff/me', {
+      token: staffToken, deviceUuid, deviceSecret, body: { currentPassword: 'Staff@123', newPassword: 'NewPass@123' },
+    })
+    expect(correct.status).toBe(200)
+
+    const reloginOld = await staffLogin(app, orgCode, '9300000052', 'Staff@123').catch((e) => e)
+    expect(reloginOld).toBeInstanceOf(Error)
+    const reloginNew = await staffLogin(app, orgCode, '9300000052', 'NewPass@123')
+    expect(reloginNew.token).toBeTruthy()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
 describe('POST /sessions/:id/exit/request is idempotent on re-scan (§12 edge case found via on-device testing)', () => {
   test('re-requesting exit on an already-PAYMENT_PENDING session returns the same amount instead of erroring', async () => {
     const { token: staffToken } = await createStaffAndLogin('9300000040', 'Rescanner')

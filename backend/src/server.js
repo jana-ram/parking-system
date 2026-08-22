@@ -36,7 +36,7 @@ const loginLimiter = rateLimit({
   message: { success: false, message: 'Too many login attempts, please try again later' },
 })
 
-const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:5173']
+const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:7000']
 app.use(cors({
   origin: (origin, cb) => (!origin || allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error('Not allowed by CORS'))),
   credentials: true,

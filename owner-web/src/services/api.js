@@ -20,7 +20,7 @@ api.interceptors.response.use(
   (err) => {
     if (err.response?.status === 401) {
       localStorage.removeItem('platform_token')
-      window.location.href = '/login'
+      window.location.href = '/parking/login'
     }
     return Promise.reject(err)
   },

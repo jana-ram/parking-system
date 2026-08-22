@@ -12,6 +12,12 @@ const createError = (statusCode, message, details, code) => {
 const normalizeVehicleNumber = (raw) =>
   (raw || '').toUpperCase().replace(/\s+/g, '').trim()
 
+// Escapes regex metacharacters in user-supplied search input before it's
+// used to build a partial-match RegExp (session.controller.js's search) —
+// without this, a query containing e.g. "(", "." or "+" either throws or
+// silently matches more/less than the literal characters the user typed.
+const escapeRegex = (raw) => (raw || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 const haversineDistanceMeters = (lat1, lng1, lat2, lng2) => {
   const R = 6371000
   const dLat = ((lat2 - lat1) * Math.PI) / 180
@@ -40,4 +46,4 @@ const isPointInPolygon = (lat, lng, polygonCoords) => {
   return inside
 }
 
-module.exports = { createError, normalizeVehicleNumber, haversineDistanceMeters, isPointInPolygon }
+module.exports = { createError, normalizeVehicleNumber, escapeRegex, haversineDistanceMeters, isPointInPolygon }

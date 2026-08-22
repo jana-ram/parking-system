@@ -16,6 +16,7 @@ router.get('/open', ctrl.listOpenShiftsAtLocation)
 router.post('/start', validate(startShift), ctrl.startShift)
 router.post('/:id/close', validate(closeShift), ctrl.loadShift, ctrl.closeShift)
 router.get('/:id/tally', ctrl.loadShift, ctrl.getTally)
+router.get('/:id/tally-preview', ctrl.loadShift, ctrl.getTallyPreview)
 router.post('/:id/tally/approve', authorize('MANAGER', 'ORG_ADMIN'), ctrl.loadShift, ctrl.approveTally)
 
 // §14: Manager (own location) or Org Admin only.

@@ -1,4 +1,6 @@
 const StaffUser = require('../models/StaffUser')
+const ShiftInstance = require('../models/ShiftInstance')
+const Location = require('../models/Location')
 const auditLog = require('../services/auditLog.service')
 const { createError } = require('../utils/helpers')
 
@@ -120,4 +122,50 @@ const updateStaff = async (req, res, next) => {
   }
 }
 
-module.exports = { listStaff, createStaff, updateStaff, getMe, updateMe }
+/**
+ * GET /staff/on-duty — Manager+: which staff is on shift where, right now
+ * (open ShiftInstances joined to StaffUser for name/phone and Location for
+ * name). No schema change needed — "on duty" is exactly an OPEN shift,
+ * already tracked; this is a read, not a new concept.
+ */
+const getOnDuty = async (req, res, next) => {
+  try {
+    const shifts = await ShiftInstance.find({ organizationId: req.staffUser.organizationId, status: 'OPEN' }).sort({ openedAt: -1 })
+    const [staffDocs, locationDocs] = await Promise.all([
+      StaffUser.find({ organizationId: req.staffUser.organizationId, _id: { $in: shifts.map((s) => s.staffId) } }).select('name phone role'),
+      Location.find({ organizationId: req.staffUser.organizationId, _id: { $in: shifts.map((s) => s.locationId) } }).select('name'),
+    ])
+    const staffById = Object.fromEntries(staffDocs.map((s) => [String(s._id), s]))
+    const locationById = Object.fromEntries(locationDocs.map((l) => [String(l._id), l]))
+
+    const onDuty = shifts.map((shift) => {
+      const staff = staffById[String(shift.staffId)]
+      const location = locationById[String(shift.locationId)]
+      return {
+        shiftInstanceId: shift._id, openedAt: shift.openedAt,
+        staffId: shift.staffId, staffName: staff?.name ?? 'Unknown', staffPhone: staff?.phone ?? null, staffRole: staff?.role ?? null,
+        locationId: shift.locationId, locationName: location?.name ?? 'Unknown',
+      }
+    })
+    res.json({ success: true, message: 'ok', data: { onDuty } })
+  } catch (err) {
+    next(err)
+  }
+}
+
+/**
+ * GET /staff/admin-contacts — any authenticated staff role (not just
+ * Manager+): the "Call Admin" number(s) for their org. No config field
+ * needed — Org Admin is already a role, so this just queries it rather than
+ * inventing a settings field for something already expressible.
+ */
+const getAdminContacts = async (req, res, next) => {
+  try {
+    const admins = await StaffUser.find({ organizationId: req.staffUser.organizationId, role: 'ORG_ADMIN', status: 'ACTIVE' }).select('name phone')
+    res.json({ success: true, message: 'ok', data: { admins: admins.map((a) => ({ id: a._id, name: a.name, phone: a.phone })) } })
+  } catch (err) {
+    next(err)
+  }
+}
+
+module.exports = { listStaff, createStaff, updateStaff, getMe, updateMe, getOnDuty, getAdminContacts }

@@ -152,6 +152,26 @@ const getTally = async (req, res, next) => {
   }
 }
 
+/**
+ * GET /shifts/:id/tally-preview — read-only. Reuses closeShift's own
+ * computeTally() so staff can see the expected cash/UPI/card breakdown
+ * BEFORE typing an actual count and submitting close, instead of only
+ * finding out afterward (getTally above 404s until a ShiftTally exists,
+ * which close() is what creates). Never persists a ShiftTally or touches
+ * shiftInstance.status — actualCashMinor:0 is fine here since the preview
+ * only needs the expected-* fields, not a variance.
+ */
+const getTallyPreview = async (req, res, next) => {
+  try {
+    const computed = await shiftService.computeTally({
+      organizationId: req.staffUser.organizationId, shiftInstanceId: req.shift._id, actualCashMinor: 0,
+    })
+    res.json({ success: true, message: 'ok', data: { preview: computed } })
+  } catch (err) {
+    next(err)
+  }
+}
+
 const approveTally = async (req, res, next) => {
   try {
     const tally = await ShiftTally.findOne({ organizationId: req.staffUser.organizationId, shiftInstanceId: req.shift._id })
@@ -180,4 +200,4 @@ const initiateHandover = async (req, res, next) => {
   }
 }
 
-module.exports = { loadShift, getCurrentShift, listOpenShiftsAtLocation, startShift, closeShift, forceCloseShift, getTally, approveTally, initiateHandover }
+module.exports = { loadShift, getCurrentShift, listOpenShiftsAtLocation, startShift, closeShift, forceCloseShift, getTally, getTallyPreview, approveTally, initiateHandover }

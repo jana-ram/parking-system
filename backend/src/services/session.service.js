@@ -79,10 +79,14 @@ async function enterVehicle({ organizationId, staffUser, device, shiftInstance, 
   const existing = await ParkingSession.findOne({ organizationId, clientTransactionId })
   if (existing) return { statusCode: 200, session: existing }
 
-  const location = await Location.findOne({ _id: locationId, organizationId })
+  // Independent reads — run concurrently instead of two sequential round
+  // trips (real, measured latency win on this path; found while
+  // investigating "parking a vehicle is slow").
+  const [location, token] = await Promise.all([
+    Location.findOne({ _id: locationId, organizationId }),
+    QrToken.findOne({ organizationId, tokenCode }),
+  ])
   if (!location) throw createError(404, 'Location not found', null, 'NOT_FOUND')
-
-  const token = await QrToken.findOne({ organizationId, tokenCode })
   if (!token) throw createError(404, 'QR token is not recognized', null, 'TOKEN_INVALID_STATUS')
   if (String(token.locationId) !== String(locationId)) {
     throw createError(409, 'QR token belongs to a different location', null, 'TOKEN_LOCATION_MISMATCH')

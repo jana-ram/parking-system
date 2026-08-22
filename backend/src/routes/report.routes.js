@@ -9,5 +9,6 @@ const ctrl = require('../controllers/report.controller')
 // needs day-to-day.
 router.use(protect, deviceCheck, authorize('MANAGER', 'ORG_ADMIN'))
 router.get('/summary', ctrl.getSummary)
+router.get('/staff-collection', ctrl.getStaffCollection)
 
 module.exports = router

@@ -1,8 +1,9 @@
 const ParkingSession = require('../models/ParkingSession')
 const Vehicle = require('../models/Vehicle')
 const QrToken = require('../models/QrToken')
+const Payment = require('../models/Payment')
 const sessionService = require('../services/session.service')
-const { normalizeVehicleNumber, createError } = require('../utils/helpers')
+const { escapeRegex, createError } = require('../utils/helpers')
 
 /**
  * GET /sessions/by-token/:tokenCode — [Phase 7 addition] the mobile Scan &
@@ -136,18 +137,59 @@ const listActiveSessions = async (req, res, next) => {
   }
 }
 
+/**
+ * GET /sessions/search?q= — partial, case-insensitive match against EITHER
+ * the vehicle number OR the QR/parking token code (same field, tokenCode —
+ * there's only one token identifier in this schema). Previously matched
+ * vehicleNumber only, and only exactly (normalizeVehicleNumber + findOne) —
+ * a query like "AB12" against a stored "TN45AB1234" returned nothing, which
+ * was the actual "vehicle search isn't working" bug. Also the shared data
+ * source for the History screen, so results carry staff names and a payment
+ * summary, not just bare session docs.
+ */
 const searchSessions = async (req, res, next) => {
   try {
-    const vehicleNumber = normalizeVehicleNumber(req.query.vehicleNumber || '')
-    if (!vehicleNumber) return next(createError(422, 'vehicleNumber query param is required', null, 'VALIDATION_ERROR'))
+    const raw = (req.query.q || req.query.vehicleNumber || '').trim()
+    if (!raw) return next(createError(422, 'q query param is required', null, 'VALIDATION_ERROR'))
 
-    const vehicle = await Vehicle.findOne({ organizationId: req.staffUser.organizationId, vehicleNumber })
-    if (!vehicle) return res.json({ success: true, message: 'ok', data: { sessions: [] } })
+    const organizationId = req.staffUser.organizationId
+    const pattern = new RegExp(escapeRegex(raw), 'i')
 
-    const sessions = await ParkingSession.find({ organizationId: req.staffUser.organizationId, vehicleId: vehicle._id })
+    const [vehicles, tokens] = await Promise.all([
+      Vehicle.find({ organizationId, vehicleNumber: pattern }).select('_id').limit(200),
+      QrToken.find({ organizationId, tokenCode: pattern }).select('_id').limit(200),
+    ])
+
+    const orConditions = []
+    if (vehicles.length) orConditions.push({ vehicleId: { $in: vehicles.map((v) => v._id) } })
+    if (tokens.length) orConditions.push({ tokenId: { $in: tokens.map((t) => t._id) } })
+    if (!orConditions.length) return res.json({ success: true, message: 'ok', data: { sessions: [] } })
+
+    const sessions = await ParkingSession.find({ organizationId, $or: orConditions })
       .sort({ entryAt: -1 })
-      .limit(20)
-    res.json({ success: true, message: 'ok', data: { sessions } })
+      .limit(50)
+      // requireOrgScope doesn't filter populate() queries (see
+      // findSessionByTokenCode above) — `match` is required on every one of
+      // these, not optional decoration.
+      .populate({ path: 'vehicleId', select: 'vehicleNumber', match: { organizationId } })
+      .populate({ path: 'tokenId', select: 'tokenCode', match: { organizationId } })
+      .populate({ path: 'entryStaffId', select: 'name', match: { organizationId } })
+      .populate({ path: 'exitStaffId', select: 'name', match: { organizationId } })
+
+    const payments = await Payment.find({
+      organizationId,
+      parkingSessionId: { $in: sessions.map((s) => s._id) },
+      status: { $in: ['PAID', 'PARTIALLY_PAID'] },
+    }).select('parkingSessionId method amountMinor status')
+
+    const paymentsBySession = {}
+    for (const p of payments) {
+      const key = String(p.parkingSessionId)
+      ;(paymentsBySession[key] ??= []).push({ method: p.method, amountMinor: p.amountMinor, status: p.status })
+    }
+
+    const results = sessions.map((s) => ({ ...s.toObject(), payments: paymentsBySession[String(s._id)] || [] }))
+    res.json({ success: true, message: 'ok', data: { sessions: results } })
   } catch (err) {
     next(err)
   }

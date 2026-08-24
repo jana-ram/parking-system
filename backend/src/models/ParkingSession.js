@@ -48,6 +48,15 @@ const ParkingSessionSchema = new mongoose.Schema({
   currency: { type: String, required: true, uppercase: true },
   cancelReason: String,
 
+  // [Added for fixed-entry/no-exit locations] Denormalized at entry time from
+  // the resolved pricingMode + the location's fixedEntryNoExit toggle, same
+  // reasoning as pricingMode itself: can't drift out from under an in-flight
+  // session if the location's flag is edited later. Read-side UX metadata
+  // only — does NOT gate sessionStateMachine transitions; a staff exit scan
+  // remains fully possible (and still the only way to free the token) even
+  // when this is false, it's simply optional rather than mandatory.
+  exitRequired: { type: Boolean, default: true },
+
   clientTransactionId: { type: String, required: true }, // idempotency key, generated on-device at CREATE
   syncStatus: { type: String, enum: SYNC_STATUSES, default: 'SYNCED' },
 

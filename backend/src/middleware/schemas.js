@@ -53,6 +53,12 @@ const createLocation = Joi.object({
   currency: Joi.string().trim().uppercase().length(3).required(),
 })
 
+const locationFeaturesSchema = Joi.object({
+  exitDiscount: Joi.object({ enabled: Joi.boolean().required() }),
+  fixedEntryNoExit: Joi.object({ enabled: Joi.boolean().required() }),
+  slotAssignment: Joi.object({ enabled: Joi.boolean().required() }),
+}).unknown(false)
+
 const updateLocation = Joi.object({
   name: Joi.string().trim().min(2).max(120),
   address: Joi.string().trim().allow('', null),
@@ -61,6 +67,7 @@ const updateLocation = Joi.object({
   timezone: Joi.string().trim(),
   currency: Joi.string().trim().uppercase().length(3),
   status: Joi.string().valid('ACTIVE', 'INACTIVE'),
+  features: locationFeaturesSchema,
 }).min(1)
 
 // ── Staff (§3, §O) ───────────────────────────────────────────────────────
@@ -146,6 +153,18 @@ const createPricingRuleVersion = Joi.object({
   effectiveFrom: Joi.date().iso(),
 })
 
+// ── Parking areas / slots (configurable slot-assignment feature) ────────
+const createParkingArea = Joi.object({
+  locationId: Joi.string().hex().length(24).required(),
+  name: Joi.string().trim().min(1).max(80).required(),
+  capacity: Joi.number().integer().min(1),
+})
+
+const createSlots = Joi.object({
+  slotNumbers: Joi.array().items(Joi.string().trim().min(1).max(20)).min(1).max(500).required(),
+  vehicleTypeId: Joi.string().hex().length(24).allow(null),
+})
+
 // ── Tokens (§6, §7) ──────────────────────────────────────────────────────
 const provisionTokenBatch = Joi.object({
   locationId: Joi.string().hex().length(24).required(),
@@ -213,7 +232,15 @@ const sessionCancel = Joi.object({
 const sessionPayment = Joi.object({
   clientTransactionId: Joi.string().trim().required(),
   method: Joi.string().valid('CASH', 'UPI', 'CARD', 'OTHER').required(),
-  amountMinor: Joi.number().integer().min(1).required(),
+  // min 0, not 1: a fully-discounted (free) payment legitimately collects Rs0.
+  amountMinor: Joi.number().integer().min(0).required(),
+  discountMinor: Joi.number().integer().min(0),
+  discountReason: Joi.string().trim().min(3).max(300)
+    // .required() on the `is` schema matters: without it, Joi treats a
+    // MISSING discountMinor as trivially satisfying `Joi.number().greater(0)`
+    // (an optional schema accepts undefined), which would wrongly force
+    // discountReason to be required on every plain payment with no discount.
+    .when('discountMinor', { is: Joi.number().greater(0).required(), then: Joi.required() }),
 })
 
 // ── Sync (§23-§25, Phase 5) ──────────────────────────────────────────────
@@ -243,6 +270,8 @@ module.exports = {
   updateOrg,
   createLocation,
   updateLocation,
+  createParkingArea,
+  createSlots,
   createStaff,
   updateStaff,
   updateOwnStaff,

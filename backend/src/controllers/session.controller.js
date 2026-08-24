@@ -60,7 +60,7 @@ const enterVehicle = async (req, res, next) => {
     res.status(statusCode).json({
       success: true,
       message: statusCode === 201 ? 'Vehicle parked' : 'Already processed',
-      data: { sessionId: session._id, status: session.status, tokenId: session.tokenId, pricingRuleVersionId: session.pricingRuleVersionId, amountDueMinor: session.amountDueMinor },
+      data: { sessionId: session._id, status: session.status, tokenId: session.tokenId, pricingRuleVersionId: session.pricingRuleVersionId, amountDueMinor: session.amountDueMinor, exitRequired: session.exitRequired },
     })
   } catch (err) {
     next(err)
@@ -104,7 +104,7 @@ const recordPayment = async (req, res, next) => {
     res.status(statusCode).json({
       success: true,
       message: 'Payment recorded',
-      data: { paymentId: payment._id, status: payment.status, sessionStatus: session.status },
+      data: { paymentId: payment._id, status: payment.status, sessionStatus: session.status, discountMinor: payment.discountMinor },
     })
   } catch (err) {
     next(err)

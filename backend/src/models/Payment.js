@@ -11,6 +11,8 @@ const PaymentSchema = new mongoose.Schema({
   status: { type: String, enum: PAYMENT_STATUSES, default: 'PENDING' },
   amountMinor: { type: Number, required: true },
   currency: { type: String, required: true, uppercase: true },
+  discountMinor: { type: Number, default: 0 },
+  discountReason: String,
   recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'StaffUser', required: true },
   shiftInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ShiftInstance', required: true },
   deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device', required: true },

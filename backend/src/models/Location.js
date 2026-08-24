@@ -26,6 +26,14 @@ const LocationSchema = new mongoose.Schema({
   timezone: { type: String, required: true },
   currency: { type: String, required: true, uppercase: true },
   status: { type: String, enum: LOCATION_STATUSES, default: 'ACTIVE' },
+  // Per-location operating-policy toggles (distinct from pricing math, which
+  // stays in PricingRuleVersion.config) — default off, turned on via
+  // PATCH /locations/:id once a location exists.
+  features: {
+    exitDiscount: { enabled: { type: Boolean, default: false } },
+    fixedEntryNoExit: { enabled: { type: Boolean, default: false } },
+    slotAssignment: { enabled: { type: Boolean, default: false } },
+  },
 }, { timestamps: true })
 
 LocationSchema.index({ geofencePolygon: '2dsphere' }, { sparse: true })

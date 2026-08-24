@@ -51,6 +51,7 @@ app.get('/health', (req, res) => res.json({ success: true, message: 'Smart Parki
 app.use('/auth', loginLimiter, require('./routes/auth.routes'))
 app.use('/orgs', require('./routes/org.routes'))
 app.use('/locations', require('./routes/location.routes'))
+app.use('/parking-areas', require('./routes/parkingArea.routes'))
 app.use('/staff', require('./routes/staff.routes'))
 app.use('/devices', require('./routes/device.routes'))
 app.use('/vehicle-types', require('./routes/vehicleType.routes'))

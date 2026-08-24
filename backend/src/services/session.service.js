@@ -99,6 +99,10 @@ async function enterVehicle({ organizationId, staffUser, device, shiftInstance, 
   const mode = rule.mode
   const isEntryPriced = ENTRY_PRICED_MODES.includes(mode)
   const amountDueMinor = isEntryPriced ? pricingEngine.calculateEntryAmount(version.config) : null
+  // Fixed-entry/no-exit locations (temples etc.): a FIXED_DURATION session at
+  // a location with fixedEntryNoExit enabled makes the exit scan optional —
+  // read-side UX metadata only, does not change sessionStateMachine at all.
+  const exitRequired = !(mode === 'FIXED_DURATION' && location.features?.fixedEntryNoExit?.enabled)
 
   const vehicleNumber = normalizeVehicleNumber(rawVehicleNumber)
   const entryDate = entryAt ? new Date(entryAt) : new Date()
@@ -118,7 +122,7 @@ async function enterVehicle({ organizationId, staffUser, device, shiftInstance, 
         created = (await ParkingSession.create([{
           organizationId, locationId, parkingAreaId: parkingAreaId || null, slotId: slotId || null,
           vehicleId: vehicle._id, vehicleTypeId, tokenId: token._id, pricingRuleVersionId: version._id,
-          pricingMode: mode, status: 'CREATED',
+          pricingMode: mode, status: 'CREATED', exitRequired,
           entryStaffId: staffUser._id, entryShiftInstanceId: shiftInstance._id, entryDeviceId: device._id,
           entryAt: entryDate, amountDueMinor, currency: location.currency, clientTransactionId,
         }], { session: mongooseSession }))[0]
@@ -273,7 +277,7 @@ async function requestExit({ organizationId, staffUser, device, shiftInstance, s
  * advance past.
  */
 async function recordPayment({ organizationId, staffUser, device, shiftInstance, session, body }) {
-  const { clientTransactionId, method, amountMinor } = body
+  const { clientTransactionId, method, amountMinor, discountMinor = 0, discountReason } = body
 
   if (session.status !== 'PAYMENT_PENDING') {
     throw createError(409, 'This session is not awaiting payment', null, 'SESSION_INVALID_TRANSITION')
@@ -281,6 +285,19 @@ async function recordPayment({ organizationId, staffUser, device, shiftInstance,
 
   const existingPayment = await Payment.findOne({ organizationId, clientTransactionId })
   if (existingPayment) return { statusCode: 200, payment: existingPayment, session }
+
+  if (discountMinor > 0) {
+    const remainingDue = session.amountDueMinor - session.amountPaidMinor
+    if (discountMinor > remainingDue) {
+      throw createError(422, 'Discount cannot exceed the amount still due', null, 'VALIDATION_ERROR')
+    }
+    // Only queried on this path — the common no-discount payment doesn't pay
+    // the cost of an extra read.
+    const location = await Location.findOne({ _id: session.locationId, organizationId })
+    if (!location?.features?.exitDiscount?.enabled) {
+      throw createError(403, 'Discount is not enabled at this location', null, 'FEATURE_DISABLED')
+    }
+  }
 
   const isEntryPriced = ENTRY_PRICED_MODES.includes(session.pricingMode)
   const nextStatus = isEntryPriced ? 'ACTIVE' : 'COMPLETED'
@@ -291,11 +308,16 @@ async function recordPayment({ organizationId, staffUser, device, shiftInstance,
     await mongooseSession.withTransaction(async () => {
       payment = (await Payment.create([{
         organizationId, parkingSessionId: session._id, method, amountMinor, currency: session.currency,
+        discountMinor, discountReason,
         status: 'PENDING', recordedBy: staffUser._id, shiftInstanceId: shiftInstance._id, deviceId: device._id, clientTransactionId,
       }], { session: mongooseSession }))[0]
 
+      // A discount closes the gap between amountPaidMinor and amountDueMinor
+      // the same way cash does, but only the actually-collected amountMinor
+      // is added to session.amountPaidMinor — that field must keep meaning
+      // "money actually collected" for shift-tally cash reconciliation.
       const totalPaid = session.amountPaidMinor + amountMinor
-      const fullyPaid = totalPaid >= session.amountDueMinor
+      const fullyPaid = (totalPaid + discountMinor) >= session.amountDueMinor
       payment.status = fullyPaid ? 'PAID' : 'PARTIALLY_PAID'
       await payment.save({ session: mongooseSession })
 
@@ -326,7 +348,7 @@ async function recordPayment({ organizationId, staffUser, device, shiftInstance,
       organizationId, actorId: staffUser._id, actorRole: staffUser.role, actorName: staffUser.name,
       action: session.status === 'COMPLETED' ? 'SESSION_COMPLETED' : 'SESSION_PAYMENT_RECORDED',
       entityType: 'ParkingSession', entityId: session._id,
-      newValue: { method, amountMinor, sessionStatus: session.status },
+      newValue: { method, amountMinor, sessionStatus: session.status, ...(discountMinor > 0 && { discountMinor, discountReason }) },
       deviceId: device._id, locationId: session.locationId, shiftInstanceId: shiftInstance._id,
     })
 

@@ -206,6 +206,22 @@ const initiateHandover = Joi.object({
   toShiftInstanceId: Joi.string().hex().length(24).required(),
 })
 
+// ── Collection handover (staff cash deposit to Admin/Manager) ──────────
+const initiateCollectionHandover = Joi.object({
+  shiftInstanceId: Joi.string().hex().length(24).required(),
+  amountMinor: Joi.number().integer().min(0).required(),
+  notes: Joi.string().trim().max(500).allow('', null),
+})
+
+const confirmCollectionHandover = Joi.object({
+  receivedAmountMinor: Joi.number().integer().min(0).required(),
+  notes: Joi.string().trim().max(500).allow('', null),
+})
+
+const rejectCollectionHandover = Joi.object({
+  reason: Joi.string().trim().min(3).max(300).required(),
+})
+
 // ── Parking sessions (§9, §12, §Q) ──────────────────────────────────────
 const sessionEntry = Joi.object({
   clientTransactionId: Joi.string().trim().required(),
@@ -287,6 +303,9 @@ module.exports = {
   closeShift,
   forceCloseShift,
   initiateHandover,
+  initiateCollectionHandover,
+  confirmCollectionHandover,
+  rejectCollectionHandover,
   sessionEntry,
   sessionExitRequest,
   sessionPayment,

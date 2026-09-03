@@ -5,6 +5,11 @@ const auditLog = require('../services/auditLog.service')
 const { createError } = require('../utils/helpers')
 
 const PROFILE_FIELDS = 'name phone email role status createdAt lastLogin'
+// listStaff's own select additionally needs permissionOverrides (§3/§O) so
+// an Org Admin's Staff screen can show/edit a named permission exception —
+// PROFILE_FIELDS itself stays as-is since getMe/updateMe (self-service)
+// have no business surfacing another field only Org Admin should manage.
+const LIST_FIELDS = `${PROFILE_FIELDS} permissionOverrides`
 
 const getMe = async (req, res, next) => {
   try {
@@ -56,12 +61,12 @@ const listStaff = async (req, res, next) => {
     // activate/deactivate actions hit immediately (item.id was undefined,
     // so every action PATCHed `/staff/undefined`).
     const staff = await StaffUser.find({ organizationId: req.staffUser.organizationId })
-      .select(PROFILE_FIELDS)
+      .select(LIST_FIELDS)
       .sort({ name: 1 })
     res.json({
       success: true,
       message: 'ok',
-      data: { staff: staff.map((s) => ({ id: s._id, name: s.name, phone: s.phone, email: s.email, role: s.role, status: s.status, createdAt: s.createdAt, lastLogin: s.lastLogin })) },
+      data: { staff: staff.map((s) => ({ id: s._id, name: s.name, phone: s.phone, email: s.email, role: s.role, status: s.status, createdAt: s.createdAt, lastLogin: s.lastLogin, permissionOverrides: s.permissionOverrides })) },
     })
   } catch (err) {
     next(err)

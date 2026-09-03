@@ -6,13 +6,22 @@ const rackSlotService = require('../services/rackSlot.service')
 const auditLog = require('../services/auditLog.service')
 const { createError, generateEntityCode } = require('../utils/helpers')
 
+// §21/§38 "overdue items are detected" — same computed-on-read convention
+// as luggage.controller.js's withOverdueFlag, not a stored/cron-flipped status.
+function withOverdueFlag(orderDoc) {
+  const order = orderDoc.toObject ? orderDoc.toObject() : orderDoc
+  const isOverdue = order.status === 'ACTIVE' && !!order.expectedPickupAt && new Date(order.expectedPickupAt) < new Date()
+  return { ...order, isOverdue }
+}
+
 const listOrders = async (req, res, next) => {
   try {
     const filter = { organizationId: req.staffUser.organizationId }
     if (req.query.status) filter.status = req.query.status
     if (req.query.locationId) filter.locationId = req.query.locationId
-    const orders = await ParcelOrder.find(filter).sort({ createdAt: -1 }).limit(500)
-    res.json({ success: true, message: 'ok', data: { orders } })
+    const orders = (await ParcelOrder.find(filter).sort({ createdAt: -1 }).limit(500)).map(withOverdueFlag)
+    const result = req.query.overdueOnly === 'true' ? orders.filter((o) => o.isOverdue) : orders
+    res.json({ success: true, message: 'ok', data: { orders: result } })
   } catch (err) {
     next(err)
   }
@@ -20,10 +29,10 @@ const listOrders = async (req, res, next) => {
 
 const getOrder = async (req, res, next) => {
   try {
-    const order = await ParcelOrder.findOne({ _id: req.params.id, organizationId: req.staffUser.organizationId })
-    if (!order) return next(createError(404, 'Parcel order not found', null, 'NOT_FOUND'))
-    const items = await ParcelItem.find({ organizationId: req.staffUser.organizationId, orderId: order._id }).sort({ createdAt: 1 })
-    res.json({ success: true, message: 'ok', data: { order, items } })
+    const orderDoc = await ParcelOrder.findOne({ _id: req.params.id, organizationId: req.staffUser.organizationId })
+    if (!orderDoc) return next(createError(404, 'Parcel order not found', null, 'NOT_FOUND'))
+    const items = await ParcelItem.find({ organizationId: req.staffUser.organizationId, orderId: orderDoc._id }).sort({ createdAt: 1 })
+    res.json({ success: true, message: 'ok', data: { order: withOverdueFlag(orderDoc), items } })
   } catch (err) {
     next(err)
   }

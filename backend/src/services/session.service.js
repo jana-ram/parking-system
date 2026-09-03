@@ -12,6 +12,7 @@ const tokenStateMachine = require('../domain/tokenStateMachine')
 const pricingEngine = require('../domain/pricingEngine')
 const pricingRuleService = require('./pricingRule.service')
 const auditLog = require('./auditLog.service')
+const correctionService = require('./correction.service')
 const { normalizeVehicleNumber, createError } = require('../utils/helpers')
 
 const ENTRY_PRICED_MODES = ['PAY_ON_ENTRY', 'FIXED_DURATION']
@@ -418,4 +419,31 @@ async function cancelSession({ organizationId, staffUser, device, session, reaso
   }
 }
 
-module.exports = { enterVehicle, requestExit, recordPayment, cancelSession, ENTRY_PRICED_MODES }
+/**
+ * overrideAmount — §12's manual-amount option, generalized beyond the
+ * exit-discount feature above: a Manager+ can replace the system-calculated
+ * amountDueMinor outright (up or down), always via correction.service.js so
+ * the old/new/reason/actor history is recorded, never a silent overwrite.
+ * Only while PAYMENT_PENDING — amountDueMinor is a plain stored field read
+ * (not recomputed) at payment time, so an override here flows straight
+ * through to recordPayment() with no other code path needing to change.
+ */
+async function overrideAmount({ organizationId, staffUser, device, session, manualAmountMinor, reason }) {
+  if (session.status !== 'PAYMENT_PENDING') {
+    throw createError(409, `Cannot override the amount on a session that is ${session.status}`, null, 'VALIDATION_ERROR')
+  }
+
+  const oldValue = session.amountDueMinor
+  session.amountDueMinor = manualAmountMinor
+  await session.save()
+
+  await correctionService.applyCorrection({
+    organizationId, entityType: 'ParkingSession', entityId: session._id, field: 'amountDueMinor',
+    oldValue, newValue: manualAmountMinor, reason, staffUser,
+    deviceId: device._id, locationId: session.locationId, shiftInstanceId: session.exitShiftInstanceId || session.entryShiftInstanceId,
+  })
+
+  return session
+}
+
+module.exports = { enterVehicle, requestExit, recordPayment, cancelSession, overrideAmount, ENTRY_PRICED_MODES }

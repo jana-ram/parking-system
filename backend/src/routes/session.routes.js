@@ -6,7 +6,7 @@ const requireFeature = require('../middleware/requireFeature.middleware')
 const shiftCheck = require('../middleware/shiftCheck.middleware')
 const locationCheck = require('../middleware/locationCheck.middleware')
 const validate = require('../middleware/validate.middleware')
-const { sessionEntry, sessionExitRequest, sessionPayment, sessionCancel } = require('../middleware/schemas')
+const { sessionEntry, sessionExitRequest, sessionPayment, sessionCancel, sessionOverrideAmount } = require('../middleware/schemas')
 const ctrl = require('../controllers/session.controller')
 
 router.use(protect, deviceCheck, requireFeature('PARKING'))
@@ -50,5 +50,10 @@ router.post('/:id/payment', validate(sessionPayment), shiftCheck, ctrl.loadSessi
 // shift at this location would be an arbitrary extra constraint the role
 // gate + mandatory reason + audit trail already cover.
 router.post('/:id/cancel', validate(sessionCancel), authorize('MANAGER', 'ORG_ADMIN'), ctrl.loadSession, ctrl.cancelSession)
+
+// §12 — Manager+ manual-amount override, same administrative tier as
+// cancel: no shiftCheck, mandatory reason, always recorded via
+// correction.service.js (never a silent overwrite).
+router.post('/:id/override-amount', validate(sessionOverrideAmount), authorize('MANAGER', 'ORG_ADMIN'), ctrl.loadSession, ctrl.overrideAmount)
 
 module.exports = router

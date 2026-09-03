@@ -3,6 +3,7 @@ const RackSlot = require('../models/RackSlot')
 const RackSlotMovement = require('../models/RackSlotMovement')
 const rackSlotStateMachine = require('../domain/rackSlotStateMachine')
 const { suggestSlot } = require('../domain/rackAssignment')
+const rackSlotService = require('../services/rackSlot.service')
 const auditLog = require('../services/auditLog.service')
 const { createError } = require('../utils/helpers')
 
@@ -128,44 +129,11 @@ const suggestRackSlot = async (req, res, next) => {
 const assignSlot = async (req, res, next) => {
   try {
     const { itemType, itemRef, reason } = req.body
-    const slot = await RackSlot.findOne({ _id: req.params.id, organizationId: req.staffUser.organizationId })
-    if (!slot) return next(createError(404, 'Rack slot not found', null, 'NOT_FOUND'))
-
-    if (!['AVAILABLE', 'RESERVED'].includes(slot.status)) {
-      return next(createError(409, `Cannot assign a slot that is ${slot.status}`, null, 'RACK_SLOT_INVALID_STATUS'))
-    }
-    if (Array.isArray(slot.allowedItemTypes) && slot.allowedItemTypes.length && !slot.allowedItemTypes.includes(itemType)) {
-      return next(createError(422, `This slot does not accept ${itemType}`, null, 'RACK_SLOT_ITEM_TYPE_MISMATCH'))
-    }
-
-    const fromStatus = slot.status
-    slot.status = 'OCCUPIED'
-    slot.currentItemType = itemType
-    slot.currentItemRef = itemRef
-    slot.occupiedAt = new Date()
-    await slot.save()
-
-    await RackSlotMovement.create({
-      organizationId: req.staffUser.organizationId,
-      slotId: slot._id,
-      fromStatus,
-      toStatus: 'OCCUPIED',
-      itemType,
-      itemRef,
-      actorUserId: req.staffUser._id,
-      deviceId: req.device._id,
-      locationId: slot.locationId,
-      shiftInstanceId: req.shiftInstance?._id,
-      reason,
+    const slot = await rackSlotService.occupySlot({
+      slotId: req.params.id, organizationId: req.staffUser.organizationId, itemType, itemRef,
+      actorUserId: req.staffUser._id, actorRole: req.staffUser.role, actorName: req.staffUser.name,
+      deviceId: req.device._id, shiftInstanceId: req.shiftInstance?._id, reason,
     })
-
-    await auditLog.record(req, {
-      action: 'RACK_SLOT_ASSIGNED', entityType: 'RackSlot', entityId: slot._id,
-      oldValue: { status: fromStatus },
-      newValue: { status: 'OCCUPIED', itemType, itemRef },
-      locationId: slot.locationId, shiftInstanceId: req.shiftInstance?._id,
-    })
-
     res.json({ success: true, message: 'Rack slot assigned', data: { slot } })
   } catch (err) {
     next(err)
@@ -175,41 +143,11 @@ const assignSlot = async (req, res, next) => {
 const releaseSlot = async (req, res, next) => {
   try {
     const { reason } = req.body
-    const slot = await RackSlot.findOne({ _id: req.params.id, organizationId: req.staffUser.organizationId })
-    if (!slot) return next(createError(404, 'Rack slot not found', null, 'NOT_FOUND'))
-
-    if (slot.status !== 'OCCUPIED') {
-      return next(createError(409, `Cannot release a slot that is ${slot.status}`, null, 'RACK_SLOT_INVALID_STATUS'))
-    }
-
-    const { currentItemType: itemType, currentItemRef: itemRef } = slot
-    slot.status = 'AVAILABLE'
-    slot.currentItemType = null
-    slot.currentItemRef = null
-    slot.occupiedAt = null
-    await slot.save()
-
-    await RackSlotMovement.create({
-      organizationId: req.staffUser.organizationId,
-      slotId: slot._id,
-      fromStatus: 'OCCUPIED',
-      toStatus: 'AVAILABLE',
-      itemType,
-      itemRef,
-      actorUserId: req.staffUser._id,
-      deviceId: req.device._id,
-      locationId: slot.locationId,
-      shiftInstanceId: req.shiftInstance?._id,
-      reason,
+    const slot = await rackSlotService.vacateSlot({
+      slotId: req.params.id, organizationId: req.staffUser.organizationId,
+      actorUserId: req.staffUser._id, actorRole: req.staffUser.role, actorName: req.staffUser.name,
+      deviceId: req.device._id, shiftInstanceId: req.shiftInstance?._id, reason,
     })
-
-    await auditLog.record(req, {
-      action: 'RACK_SLOT_RELEASED', entityType: 'RackSlot', entityId: slot._id,
-      oldValue: { status: 'OCCUPIED', itemType, itemRef },
-      newValue: { status: 'AVAILABLE' },
-      locationId: slot.locationId, shiftInstanceId: req.shiftInstance?._id,
-    })
-
     res.json({ success: true, message: 'Rack slot released', data: { slot } })
   } catch (err) {
     next(err)

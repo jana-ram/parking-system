@@ -102,6 +102,13 @@ const updateStaff = Joi.object({
   email: Joi.string().trim().lowercase().email().allow('', null),
   role: Joi.string().valid('ORG_ADMIN', 'MANAGER', 'STAFF'),
   status: Joi.string().valid('ACTIVE', 'SUSPENDED'),
+  // §3/§O — named-permission exceptions on top of the base role (e.g. grant
+  // 'pricing.edit' to a Manager without making them Org Admin). ORG_ADMIN-
+  // only to set, same as every other field here.
+  permissionOverrides: Joi.array().items(Joi.object({
+    code: Joi.string().trim().min(1).max(60).required(),
+    effect: Joi.string().valid('GRANT', 'DENY').required(),
+  })).max(50),
 }).min(1)
 
 // Self-service profile edit (PATCH /staff/me) — deliberately a NARROWER
@@ -230,6 +237,91 @@ const updateRackSlotStatus = Joi.object({
   reason: Joi.string().trim().min(3).max(300).required(),
 })
 
+// ── Luggage management (§8 of the platform brief) ───────────────────────
+const createLuggageOrder = Joi.object({
+  locationId: Joi.string().hex().length(24).required(),
+  customerName: Joi.string().trim().min(1).max(120).required(),
+  customerPhone: Joi.string().trim().min(6).max(20).required(),
+  ratePerDayMinor: Joi.number().integer().min(0).required(),
+  expectedPickupAt: Joi.date().iso(),
+  notes: Joi.string().trim().max(500).allow('', null),
+})
+
+const addLuggageItems = Joi.object({
+  items: Joi.array().items(Joi.object({
+    description: Joi.string().trim().min(1).max(200).required(),
+    quantity: Joi.number().integer().min(1).max(100),
+  })).min(1).max(100).required(),
+})
+
+const recordLuggagePayment = Joi.object({
+  method: Joi.string().valid('CASH', 'UPI', 'CARD', 'OTHER').required(),
+  amountMinor: Joi.number().integer().min(1).required(),
+  clientTransactionId: Joi.string().trim().required(),
+})
+
+const cancelLuggageOrder = Joi.object({
+  reason: Joi.string().trim().min(3).max(300).required(),
+})
+
+const luggageOverrideAmount = Joi.object({
+  manualAmountMinor: Joi.number().integer().min(0).required(),
+  reason: Joi.string().trim().min(3).max(300).required(),
+})
+
+const assignLuggageItemRack = Joi.object({
+  rackSlotId: Joi.string().hex().length(24).required(),
+  reason: Joi.string().trim().max(300).allow('', null),
+})
+
+const releaseLuggageItemRack = Joi.object({
+  reason: Joi.string().trim().max(300).allow('', null),
+})
+
+// ── Parcel management (§9 of the platform brief) ────────────────────────
+const createParcelOrder = Joi.object({
+  locationId: Joi.string().hex().length(24).required(),
+  senderName: Joi.string().trim().min(1).max(120).required(),
+  senderPhone: Joi.string().trim().max(20).allow('', null),
+  receiverName: Joi.string().trim().min(1).max(120).required(),
+  receiverPhone: Joi.string().trim().min(6).max(20).required(),
+  ratePerDayMinor: Joi.number().integer().min(0).required(),
+  expectedPickupAt: Joi.date().iso(),
+  notes: Joi.string().trim().max(500).allow('', null),
+})
+
+const addParcelItems = Joi.object({
+  items: Joi.array().items(Joi.object({
+    parcelType: Joi.string().trim().max(60).allow('', null),
+    description: Joi.string().trim().max(200).allow('', null),
+    quantity: Joi.number().integer().min(1).max(100),
+  })).min(1).max(100).required(),
+})
+
+const recordParcelPayment = Joi.object({
+  method: Joi.string().valid('CASH', 'UPI', 'CARD', 'OTHER').required(),
+  amountMinor: Joi.number().integer().min(1).required(),
+  clientTransactionId: Joi.string().trim().required(),
+})
+
+const cancelParcelOrder = Joi.object({
+  reason: Joi.string().trim().min(3).max(300).required(),
+})
+
+const parcelOverrideAmount = Joi.object({
+  manualAmountMinor: Joi.number().integer().min(0).required(),
+  reason: Joi.string().trim().min(3).max(300).required(),
+})
+
+const assignParcelItemRack = Joi.object({
+  rackSlotId: Joi.string().hex().length(24).required(),
+  reason: Joi.string().trim().max(300).allow('', null),
+})
+
+const releaseParcelItemRack = Joi.object({
+  reason: Joi.string().trim().max(300).allow('', null),
+})
+
 // ── Tokens (§6, §7) ──────────────────────────────────────────────────────
 const provisionTokenBatch = Joi.object({
   locationId: Joi.string().hex().length(24).required(),
@@ -310,6 +402,13 @@ const sessionCancel = Joi.object({
   reason: Joi.string().trim().min(3).max(300).required(),
 })
 
+// §12 — manual amount override, generic across ParkingSession/LuggageOrder/
+// ParcelOrder (see the *OverrideAmount siblings further down).
+const sessionOverrideAmount = Joi.object({
+  manualAmountMinor: Joi.number().integer().min(0).required(),
+  reason: Joi.string().trim().min(3).max(300).required(),
+})
+
 const sessionPayment = Joi.object({
   clientTransactionId: Joi.string().trim().required(),
   method: Joi.string().valid('CASH', 'UPI', 'CARD', 'OTHER').required(),
@@ -360,6 +459,21 @@ module.exports = {
   assignRackSlot,
   releaseRackSlot,
   updateRackSlotStatus,
+  createLuggageOrder,
+  addLuggageItems,
+  recordLuggagePayment,
+  cancelLuggageOrder,
+  luggageOverrideAmount,
+  assignLuggageItemRack,
+  releaseLuggageItemRack,
+  createParcelOrder,
+  addParcelItems,
+  recordParcelPayment,
+  cancelParcelOrder,
+  parcelOverrideAmount,
+  assignParcelItemRack,
+  releaseParcelItemRack,
+  sessionOverrideAmount,
   createStaff,
   updateStaff,
   updateOwnStaff,

@@ -65,9 +65,30 @@ const hasPermission = (code) => (req, res, next) => {
   return next(createError(403, `Access denied: missing permission '${code}'`, null, 'FORBIDDEN_ROLE'))
 }
 
+// authorizeOrPermission(roles, code) — passes if the caller's role is in
+// `roles`, OR they hold an explicit GRANT for permission `code` (DENY always
+// wins over GRANT). The "role tier by default, permission override for a
+// named exception" pattern pricingRule.routes.js has documented as intended-
+// but-not-yet-wired since Phase 4 (§3/§O) — this is that wiring, not a new
+// design. Kept as its own function rather than a generic authorize-OR-
+// hasPermission combinator: composing arbitrary middleware as alternatives
+// (vs. the usual all-must-pass chain) isn't a pattern this codebase uses
+// anywhere else, and one clear function for this one real need beats a
+// generic combinator with no second caller yet.
+const authorizeOrPermission = (roles, code) => (req, res, next) => {
+  if (!req.staffUser) return next(createError(401, 'Not authorized: no token', null, 'UNAUTHENTICATED'))
+  if (roles.includes(req.staffUser.role)) return next()
+
+  const overrides = req.staffUser.permissionOverrides || []
+  const deny = overrides.some(o => o.code === code && o.effect === 'DENY')
+  const grant = overrides.some(o => o.code === code && o.effect === 'GRANT')
+  if (!deny && grant) return next()
+  return next(createError(403, `Access denied: requires [${roles.join(', ')}] or permission '${code}'`, null, 'FORBIDDEN_ROLE'))
+}
+
 const adminOnly = (req, res, next) => {
   if (req.staffUser?.role === 'ORG_ADMIN') return next()
   return next(createError(403, 'Org Admin only', null, 'FORBIDDEN_ROLE'))
 }
 
-module.exports = { protect, authorize, hasPermission, adminOnly }
+module.exports = { protect, authorize, hasPermission, authorizeOrPermission, adminOnly }

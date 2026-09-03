@@ -11,5 +11,8 @@ const ctrl = require('../controllers/report.controller')
 router.use(protect, deviceCheck, requireFeature('REPORTS'), authorize('MANAGER', 'ORG_ADMIN'))
 router.get('/summary', ctrl.getSummary)
 router.get('/staff-collection', ctrl.getStaffCollection)
+router.get('/staff-collection/export', ctrl.exportStaffCollectionCsv)
+router.get('/shifts/:id/transactions', ctrl.getShiftTransactions)
+router.get('/corrections', ctrl.getCorrections)
 
 module.exports = router

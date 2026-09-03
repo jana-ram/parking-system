@@ -9,6 +9,7 @@ const shiftStateMachine = require('../domain/shiftStateMachine')
 const tokenStateMachine = require('../domain/tokenStateMachine')
 const auditLog = require('./auditLog.service')
 const anomalyService = require('./anomaly.service')
+const notificationService = require('./notification.service')
 const { createError } = require('../utils/helpers')
 
 // [Phase 4 scope note] Org-configurable per §15's worked example — not yet
@@ -112,6 +113,29 @@ async function closeShift({ organizationId, staffUser, shiftInstance, body }) {
       organizationId, shiftInstance, cancellationsCount: computed.cancellationsCount, varianceMinor: computed.varianceMinor,
     })
   } catch { /* scoring is advisory — never let it block a shift close */ }
+
+  // §20 — alert Managers/Org Admins the same two moments an admin would
+  // actually want to know about: a cash mismatch waiting on their approval,
+  // and a shift that scored HIGH/CRITICAL risk. Best-effort: notification
+  // delivery never blocks the close itself, same reasoning as anomaly scoring above.
+  try {
+    if (requiresApproval(computed.varianceMinor)) {
+      await notificationService.notifyRoles({
+        organizationId, roles: ['MANAGER', 'ORG_ADMIN'], type: 'SHIFT_TALLY_MISMATCH', severity: 'WARNING',
+        title: 'Shift cash mismatch needs approval',
+        body: `${staffUser.name}'s shift closed with a variance of ${computed.varianceMinor} minor units and needs sign-off.`,
+        entityRef: { shiftInstanceId: shiftInstance._id },
+      })
+    }
+    if (anomaly && ['HIGH', 'CRITICAL'].includes(anomaly.riskLevel)) {
+      await notificationService.notifyRoles({
+        organizationId, roles: ['MANAGER', 'ORG_ADMIN'], type: 'ANOMALY_FLAGGED', severity: anomaly.riskLevel === 'CRITICAL' ? 'CRITICAL' : 'WARNING',
+        title: `${anomaly.riskLevel} risk anomaly flagged`,
+        body: `A shift closed by ${staffUser.name} scored ${anomaly.riskLevel} risk (${anomaly.riskScore}) — review required.`,
+        entityRef: { anomalyId: anomaly._id, shiftInstanceId: shiftInstance._id },
+      })
+    }
+  } catch { /* notification delivery is advisory — never let it block a shift close */ }
 
   return { shiftInstance, tally, requiresApproval: requiresApproval(computed.varianceMinor), anomaly }
 }

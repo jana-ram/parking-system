@@ -111,6 +111,22 @@ const recordPayment = async (req, res, next) => {
   }
 }
 
+const overrideAmount = async (req, res, next) => {
+  try {
+    const session = await sessionService.overrideAmount({
+      organizationId: req.staffUser.organizationId,
+      staffUser: req.staffUser,
+      device: req.device,
+      session: req.session,
+      manualAmountMinor: req.body.manualAmountMinor,
+      reason: req.body.reason,
+    })
+    res.json({ success: true, message: 'Amount overridden', data: { sessionId: session._id, amountDueMinor: session.amountDueMinor } })
+  } catch (err) {
+    next(err)
+  }
+}
+
 const cancelSession = async (req, res, next) => {
   try {
     const session = await sessionService.cancelSession({
@@ -195,4 +211,4 @@ const searchSessions = async (req, res, next) => {
   }
 }
 
-module.exports = { loadSession, findSessionByTokenCode, enterVehicle, requestExit, recordPayment, cancelSession, listActiveSessions, searchSessions }
+module.exports = { loadSession, findSessionByTokenCode, enterVehicle, requestExit, recordPayment, overrideAmount, cancelSession, listActiveSessions, searchSessions }

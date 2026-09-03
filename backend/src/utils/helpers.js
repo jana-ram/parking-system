@@ -46,4 +46,13 @@ const isPointInPolygon = (lat, lng, polygonCoords) => {
   return inside
 }
 
-module.exports = { createError, normalizeVehicleNumber, escapeRegex, haversineDistanceMeters, isPointInPolygon }
+// Human-readable, reasonably-unique identifiers for entities created one at
+// a time outside a batch context (LuggageItem/LuggageOrder, Parcel...) —
+// timestamp + random suffix rather than a DB sequence counter, matching
+// token.controller.js's provisionBatch code-generation style. Collisions are
+// astronomically unlikely at this volume; the collection's unique index is
+// the real backstop, not this function.
+const generateEntityCode = (prefix) =>
+  `${prefix}-${Date.now().toString().slice(-8)}${Math.random().toString(36).slice(2, 5).toUpperCase()}`
+
+module.exports = { createError, normalizeVehicleNumber, escapeRegex, haversineDistanceMeters, isPointInPolygon, generateEntityCode }

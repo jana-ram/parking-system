@@ -38,6 +38,11 @@ const LuggageOrderSchema = new mongoose.Schema({
   // through services/luggage.service.js's overrideAmount(), which records a
   // Correction; never written directly.
   manualAmountOverrideMinor: { type: Number, default: null },
+  // Set once by overdueAlert.service.js's scanAndNotifyOverdue() the first
+  // time this order is found overdue — makes the sweep idempotent (one
+  // Manager/Admin alert per order, not one per sweep interval) without
+  // needing a separate log collection.
+  overdueNotifiedAt: { type: Date, default: null },
   cancelReason: String,
   createdByStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'StaffUser', required: true },
   shiftInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ShiftInstance', required: true },

@@ -28,6 +28,9 @@ const ParcelOrderSchema = new mongoose.Schema({
   amountPaidMinor: { type: Number, default: 0 },
   // §12 manual-amount override — see LuggageOrder.js's identical field.
   manualAmountOverrideMinor: { type: Number, default: null },
+  // See LuggageOrder.js's identical field — idempotency marker for
+  // overdueAlert.service.js.
+  overdueNotifiedAt: { type: Date, default: null },
   cancelReason: String,
   createdByStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'StaffUser', required: true },
   shiftInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ShiftInstance', required: true },

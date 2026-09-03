@@ -145,6 +145,14 @@ if (require.main === module) {
       await require('./utils/seed').backfillOrgModuleDefaults().catch(e => logger.warn('backfillOrgModuleDefaults:', e.message))
       const PORT = process.env.PORT || 5100
       server.listen(PORT, () => logger.info(`Smart Parking OS API running on http://localhost:${PORT}`))
+
+      // Automatic overdue-pickup detection (overdueAlert.service.js) — no
+      // separate job runner in this deployment, so a plain interval is the
+      // simplest thing that's still real (mirrors the mobile app's own
+      // SyncDriver interval). Runs once shortly after boot, then every 15m.
+      const { scanAndNotifyOverdue } = require('./services/overdueAlert.service')
+      setTimeout(() => scanAndNotifyOverdue().catch(e => logger.warn('overdueAlert:', e.message)), 30_000)
+      setInterval(() => scanAndNotifyOverdue().catch(e => logger.warn('overdueAlert:', e.message)), 15 * 60 * 1000)
     })
     .catch(err => { logger.error('MongoDB connection failed:', err.message); process.exit(1) })
 }

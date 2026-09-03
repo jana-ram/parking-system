@@ -13,7 +13,9 @@ const ctrl = require('../controllers/luggage.controller')
 router.use(protect, deviceCheck, requireFeature('LUGGAGE'))
 
 // Read-only — no active shift required to browse/search (§4 convention).
+// by-code MUST precede /:id — Express would otherwise match "by-code" as an :id value.
 router.get('/', ctrl.listOrders)
+router.get('/by-code/:orderCode', ctrl.getOrderByCode)
 router.get('/:id', ctrl.getOrder)
 
 // Operational, counter-side writes — bound to an active shift, same tier as

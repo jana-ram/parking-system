@@ -38,6 +38,19 @@ const getOrder = async (req, res, next) => {
   }
 }
 
+// GET /parcel-orders/by-code/:orderCode — see luggage.controller.js's
+// getOrderByCode for why this exists (the scan-driven pickup flow).
+const getOrderByCode = async (req, res, next) => {
+  try {
+    const orderDoc = await ParcelOrder.findOne({ orderCode: req.params.orderCode.trim(), organizationId: req.staffUser.organizationId })
+    if (!orderDoc) return next(createError(404, 'No parcel order found for this code', null, 'NOT_FOUND'))
+    const items = await ParcelItem.find({ organizationId: req.staffUser.organizationId, orderId: orderDoc._id }).sort({ createdAt: 1 })
+    res.json({ success: true, message: 'ok', data: { order: withOverdueFlag(orderDoc), items } })
+  } catch (err) {
+    next(err)
+  }
+}
+
 const createOrder = async (req, res, next) => {
   try {
     const { locationId, senderName, senderPhone, receiverName, receiverPhone, ratePerDayMinor, expectedPickupAt, notes } = req.body
@@ -183,4 +196,4 @@ const cancelOrder = async (req, res, next) => {
   }
 }
 
-module.exports = { listOrders, getOrder, createOrder, addItems, assignItemRack, releaseItemRack, overrideAmount, recordPayment, pickup, cancelOrder }
+module.exports = { listOrders, getOrder, getOrderByCode, createOrder, addItems, assignItemRack, releaseItemRack, overrideAmount, recordPayment, pickup, cancelOrder }

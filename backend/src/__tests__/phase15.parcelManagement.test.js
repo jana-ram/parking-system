@@ -131,6 +131,22 @@ describe('C1: order + item creation', () => {
     })
     expect(blockedRes.status).toBe(409)
   })
+
+  test('GET /parcel-orders/by-code/:orderCode — the scan-driven pickup lookup', async () => {
+    const ctx = await setUpOrg('par-bycode', '9500000091')
+    const order = await createOrder(ctx)
+
+    const foundRes = await signedReq(app, 'get', `/parcel-orders/by-code/${order.orderCode}`, {
+      token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret,
+    })
+    expect(foundRes.status).toBe(200)
+    expect(foundRes.body.data.order._id).toBe(order._id)
+
+    const notFoundRes = await signedReq(app, 'get', '/parcel-orders/by-code/PAR-ORD-DOES-NOT-EXIST', {
+      token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret,
+    })
+    expect(notFoundRes.status).toBe(404)
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════

@@ -6,6 +6,10 @@ const ShiftTally = require('../models/ShiftTally')
 const StaffUser = require('../models/StaffUser')
 const Location = require('../models/Location')
 const Correction = require('../models/Correction')
+const LuggageOrder = require('../models/LuggageOrder')
+const LuggagePayment = require('../models/LuggagePayment')
+const ParcelOrder = require('../models/ParcelOrder')
+const ParcelPayment = require('../models/ParcelPayment')
 const { createError } = require('../utils/helpers')
 
 // Minimal CSV writer — no new dependency for something this small (§34
@@ -21,12 +25,29 @@ function toCsv(rows, columns) {
   return [header, ...lines].join('\n')
 }
 
+// Merges N `{ _id: method, totalMinor, count }` aggregation result arrays
+// (one per revenue source — Payment/LuggagePayment/ParcelPayment) into one
+// by-method map, so "everything, every type, in one place" (per the
+// platform brief) doesn't mean re-deriving totals client-side from three
+// separate calls.
+function mergeByMethod(...resultSets) {
+  const merged = {}
+  for (const rows of resultSets) {
+    for (const r of rows) {
+      const bucket = (merged[r._id] ??= { totalMinor: 0, count: 0 })
+      bucket.totalMinor += r.totalMinor
+      bucket.count += r.count
+    }
+  }
+  return merged
+}
+
 /**
- * GET /reports/summary?locationId=&from=&to= — §36's mobile Reports screen.
- * Real aggregation over ParkingSession/Payment, scoped to the caller's
- * organization (aggregateScoped, same tenant-isolation discipline as every
- * other cross-document read in this codebase) — no client-side math, no
- * placeholder numbers. Manager+ only (route-level RBAC).
+ * GET /reports/summary?locationId=&from=&to= — §22/§36: revenue and volume
+ * across EVERY module (Parking, Luggage, Parcel), not just Parking — a
+ * per-type breakdown alongside the combined total so "show everything" and
+ * "show it clearly per type" are both true of the same response, not a
+ * tradeoff. Manager+ only (route-level RBAC).
  */
 const getSummary = async (req, res, next) => {
   try {
@@ -39,49 +60,74 @@ const getSummary = async (req, res, next) => {
       return next(createError(422, 'from/to must be valid ISO dates', null, 'VALIDATION_ERROR'))
     }
 
+    const organizationId = req.staffUser.organizationId
+    const locationObjectId = locationId ? new mongoose.Types.ObjectId(locationId) : null
     const sessionMatch = { entryAt: { $gte: fromDate, $lte: toDate } }
-    if (locationId) sessionMatch.locationId = new mongoose.Types.ObjectId(locationId)
+    if (locationObjectId) sessionMatch.locationId = locationObjectId
 
-    const [entryStats, exitStats, byVehicleType, paymentStats] = await Promise.all([
-      ParkingSession.aggregateScoped(req.staffUser.organizationId, [
-        { $match: sessionMatch },
-        { $count: 'count' },
-      ]),
-      ParkingSession.aggregateScoped(req.staffUser.organizationId, [
-        { $match: { ...sessionMatch, status: 'COMPLETED' } },
-        { $count: 'count' },
-      ]),
-      ParkingSession.aggregateScoped(req.staffUser.organizationId, [
-        { $match: sessionMatch },
-        { $group: { _id: '$vehicleTypeId', count: { $sum: 1 } } },
-      ]),
+    const [
+      entryStats, exitStats, byVehicleType, parkingPaymentStats,
+      luggagePaymentStats, luggageOrderCounts,
+      parcelPaymentStats, parcelOrderCounts,
+    ] = await Promise.all([
+      ParkingSession.aggregateScoped(organizationId, [{ $match: sessionMatch }, { $count: 'count' }]),
+      ParkingSession.aggregateScoped(organizationId, [{ $match: { ...sessionMatch, status: 'COMPLETED' } }, { $count: 'count' }]),
+      ParkingSession.aggregateScoped(organizationId, [{ $match: sessionMatch }, { $group: { _id: '$vehicleTypeId', count: { $sum: 1 } } }]),
       // Payment carries no locationId of its own (only parkingSessionId) —
       // when a locationId filter is given, join through ParkingSession to
       // apply it; skip the (more expensive) $lookup entirely for the common
       // org-wide-report case where it isn't needed.
-      Payment.aggregateScoped(req.staffUser.organizationId, [
+      Payment.aggregateScoped(organizationId, [
         { $match: { createdAt: { $gte: fromDate, $lte: toDate }, status: 'PAID' } },
-        ...(locationId ? [
+        ...(locationObjectId ? [
           { $lookup: { from: 'parkingsessions', localField: 'parkingSessionId', foreignField: '_id', as: 'session' } },
           { $unwind: '$session' },
-          { $match: { 'session.locationId': new mongoose.Types.ObjectId(locationId) } },
+          { $match: { 'session.locationId': locationObjectId } },
         ] : []),
         { $group: { _id: '$method', totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
       ]),
+      LuggagePayment.aggregateScoped(organizationId, [
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $group: { _id: '$method', totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
+      ]),
+      LuggageOrder.aggregateScoped(organizationId, [
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      ParcelPayment.aggregateScoped(organizationId, [
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $group: { _id: '$method', totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
+      ]),
+      ParcelOrder.aggregateScoped(organizationId, [
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
     ])
 
-    const revenueByMethod = Object.fromEntries(paymentStats.map((r) => [r._id, { totalMinor: r.totalMinor, count: r.count }]))
-    const totalRevenueMinor = paymentStats.reduce((sum, r) => sum + r.totalMinor, 0)
+    const totalOf = (rows) => rows.reduce((sum, r) => sum + r.totalMinor, 0)
+    const countsOf = (rows) => Object.fromEntries(rows.map((r) => [r._id, r.count]))
+    const parkingRevenueMinor = totalOf(parkingPaymentStats)
+    const luggageRevenueMinor = totalOf(luggagePaymentStats)
+    const parcelRevenueMinor = totalOf(parcelPaymentStats)
 
     res.json({
       success: true,
       message: 'ok',
       data: {
         range: { from: fromDate, to: toDate },
+        // Combined, across every module — the top-line "everything" figure.
+        totalRevenueMinor: parkingRevenueMinor + luggageRevenueMinor + parcelRevenueMinor,
+        revenueByMethod: mergeByMethod(parkingPaymentStats, luggagePaymentStats, parcelPaymentStats),
+        // Per-type breakdown — the same total, never hidden behind a single number.
+        byModule: {
+          parking: { revenueMinor: parkingRevenueMinor, vehiclesEntered: entryStats[0]?.count ?? 0, vehiclesExited: exitStats[0]?.count ?? 0 },
+          luggage: { revenueMinor: luggageRevenueMinor, orders: countsOf(luggageOrderCounts) },
+          parcel: { revenueMinor: parcelRevenueMinor, orders: countsOf(parcelOrderCounts) },
+        },
+        // Kept at top level too — existing callers (mobile ReportsScreen)
+        // already read these two fields directly.
         vehiclesEntered: entryStats[0]?.count ?? 0,
         vehiclesExited: exitStats[0]?.count ?? 0,
-        totalRevenueMinor,
-        revenueByMethod,
         byVehicleType: byVehicleType.map((r) => ({ vehicleTypeId: r._id, count: r.count })),
       },
     })
@@ -276,4 +322,36 @@ const getCorrections = async (req, res, next) => {
   }
 }
 
-module.exports = { getSummary, getStaffCollection, exportStaffCollectionCsv, getShiftTransactions, getCorrections }
+// GET /reports/summary/export?from=&to=&locationId= — CSV of the same
+// §22/§36 "everything, every type" breakdown getSummary returns, one row
+// per module plus a combined total, so the export matches what's on screen.
+const exportSummaryCsv = async (req, res, next) => {
+  try {
+    let summary
+    await new Promise((resolve, reject) => {
+      getSummary(req, { json: (body) => { summary = body.data; resolve() } }, reject)
+    })
+
+    const rows = [
+      { module: 'Parking', revenueMinor: summary.byModule.parking.revenueMinor, detail: `${summary.byModule.parking.vehiclesEntered} entered / ${summary.byModule.parking.vehiclesExited} exited` },
+      { module: 'Luggage', revenueMinor: summary.byModule.luggage.revenueMinor, detail: JSON.stringify(summary.byModule.luggage.orders) },
+      { module: 'Parcel', revenueMinor: summary.byModule.parcel.revenueMinor, detail: JSON.stringify(summary.byModule.parcel.orders) },
+      { module: 'TOTAL', revenueMinor: summary.totalRevenueMinor, detail: '' },
+    ]
+
+    const csv = toCsv(rows, [
+      { label: 'Module', value: (r) => r.module },
+      { label: 'Revenue (minor units)', value: (r) => r.revenueMinor },
+      { label: 'Revenue', value: (r) => (r.revenueMinor / 100).toFixed(2) },
+      { label: 'Detail', value: (r) => r.detail },
+    ])
+
+    res.set('Content-Type', 'text/csv')
+    res.set('Content-Disposition', 'attachment; filename="summary-report.csv"')
+    res.send(csv)
+  } catch (err) {
+    next(err)
+  }
+}
+
+module.exports = { getSummary, exportSummaryCsv, getStaffCollection, exportStaffCollectionCsv, getShiftTransactions, getCorrections }

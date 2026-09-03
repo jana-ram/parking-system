@@ -13,6 +13,7 @@ const ctrl = require('../controllers/parcel.controller')
 router.use(protect, deviceCheck, requireFeature('PARCEL'))
 
 router.get('/', ctrl.listOrders)
+router.get('/by-code/:orderCode', ctrl.getOrderByCode)
 router.get('/:id', ctrl.getOrder)
 
 router.post('/', shiftCheck, validate(createParcelOrder), ctrl.createOrder)

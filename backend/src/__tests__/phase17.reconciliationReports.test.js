@@ -100,6 +100,32 @@ describe('C0: revenue-by-method now respects the locationId filter', () => {
 
     const filteredRes = await signedReq(app, 'get', '/reports/summary', { token: adminToken, deviceUuid, deviceSecret, query: { from, to, locationId: locationA } })
     expect(filteredRes.body.data.totalRevenueMinor).toBe(1000)
+
+    // §22/§36 — the combined total is broken down per module, not just Parking.
+    expect(allRes.body.data.byModule.parking.revenueMinor).toBe(2000)
+    expect(allRes.body.data.byModule.luggage.revenueMinor).toBe(0)
+    expect(allRes.body.data.byModule.parcel.revenueMinor).toBe(0)
+  })
+})
+
+describe('C0b: summary CSV export', () => {
+  test('GET /reports/summary/export returns a CSV with a row per module plus a total', async () => {
+    const code = 'recon-export'
+    await onboardOrg(app, { platformToken, code, countryId, adminPhone: '9700000041' })
+    const { token: adminToken } = await staffLogin(app, code, '9700000041', 'Admin@123')
+    const deviceUuid = 'device-recon-export'
+    const deviceSecret = await registerDevice(app, adminToken, deviceUuid)
+
+    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const to = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    const res = await signedReq(app, 'get', '/reports/summary/export', { token: adminToken, deviceUuid, deviceSecret, query: { from, to } })
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toMatch(/text\/csv/)
+    expect(res.text).toContain('Module')
+    expect(res.text).toContain('Parking')
+    expect(res.text).toContain('Luggage')
+    expect(res.text).toContain('Parcel')
+    expect(res.text).toContain('TOTAL')
   })
 })
 

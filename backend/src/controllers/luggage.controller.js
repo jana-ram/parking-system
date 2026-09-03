@@ -40,6 +40,22 @@ const getOrder = async (req, res, next) => {
   }
 }
 
+// GET /luggage-orders/by-code/:orderCode — the scan-driven pickup flow's
+// lookup, same "scan/enter a code, resolve straight to the record" shape as
+// session.controller.js's findSessionByTokenCode. Lets staff go from a
+// scanned/typed claim code straight to the pickup screen in one step,
+// instead of browsing the order list.
+const getOrderByCode = async (req, res, next) => {
+  try {
+    const orderDoc = await LuggageOrder.findOne({ orderCode: req.params.orderCode.trim(), organizationId: req.staffUser.organizationId })
+    if (!orderDoc) return next(createError(404, 'No luggage order found for this code', null, 'NOT_FOUND'))
+    const items = await LuggageItem.find({ organizationId: req.staffUser.organizationId, orderId: orderDoc._id }).sort({ createdAt: 1 })
+    res.json({ success: true, message: 'ok', data: { order: withOverdueFlag(orderDoc), items } })
+  } catch (err) {
+    next(err)
+  }
+}
+
 // POST /luggage-orders — an operational, counter-side write bound to an
 // active shift, same tier as session entry.
 const createOrder = async (req, res, next) => {
@@ -187,4 +203,4 @@ const cancelOrder = async (req, res, next) => {
   }
 }
 
-module.exports = { listOrders, getOrder, createOrder, addItems, assignItemRack, releaseItemRack, overrideAmount, recordPayment, pickup, cancelOrder }
+module.exports = { listOrders, getOrder, getOrderByCode, createOrder, addItems, assignItemRack, releaseItemRack, overrideAmount, recordPayment, pickup, cancelOrder }

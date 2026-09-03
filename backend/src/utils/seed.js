@@ -1,6 +1,8 @@
 require('dotenv').config()
 const { connectDb } = require('../config/db')
 const Country = require('../models/Country')
+const Organization = require('../models/Organization')
+const { DEFAULT_MODULES } = require('../config/modules')
 const logger = require('./logger')
 
 /**
@@ -23,6 +25,21 @@ async function seedCountries() {
   logger.info(`Seeded ${COUNTRIES.length} countries`)
 }
 
+/**
+ * Backfills `modules` onto any Organization written before the feature-module
+ * system existed. Idempotent — only touches docs missing the field.
+ * Organization.create() already gets DEFAULT-equivalent values from the
+ * schema's own per-key defaults (Organization.js), so this only matters for
+ * docs already in the database when this migration first runs.
+ */
+async function backfillOrgModuleDefaults() {
+  const result = await Organization.updateMany(
+    { modules: { $exists: false } },
+    { $set: { modules: DEFAULT_MODULES } },
+  )
+  if (result.modifiedCount) logger.info(`Backfilled modules on ${result.modifiedCount} organization(s)`)
+}
+
 if (require.main === module) {
   connectDb()
     .then(seedCountries)
@@ -30,4 +47,4 @@ if (require.main === module) {
     .catch((err) => { logger.error('Seed failed:', err.message); process.exit(1) })
 }
 
-module.exports = { seedCountries, COUNTRIES }
+module.exports = { seedCountries, COUNTRIES, backfillOrgModuleDefaults }

@@ -1,4 +1,5 @@
 const Joi = require('joi')
+const { RACK_ITEM_TYPES } = require('../config/rackItemTypes')
 
 const staffLogin = Joi.object({
   orgCode: Joi.string().trim().lowercase().required(),
@@ -28,6 +29,23 @@ const createOrganization = Joi.object({
 const updateOrganizationStatus = Joi.object({
   status: Joi.string().valid('ACTIVE', 'SUSPENDED', 'CANCELLED').required(),
 })
+
+// §2 — Super Admin module toggles. Fixed-key (not a free-form object) so an
+// unknown module name is rejected rather than silently stored; partial
+// (`.min(1)`) since the controller merges only the keys sent, never
+// replacing the whole modules object — see platformOrg.controller.js's
+// updateOrganizationModules for why that merge semantics matters here.
+const updateOrganizationModules = Joi.object({
+  PARKING: Joi.boolean(),
+  RACK: Joi.boolean(),
+  LUGGAGE: Joi.boolean(),
+  PARCEL: Joi.boolean(),
+  BILLING: Joi.boolean(),
+  REPORTS: Joi.boolean(),
+  NOTIFICATIONS: Joi.boolean(),
+  CUSTOMER_SELF_SERVICE: Joi.boolean(),
+  AI_ASSISTANT: Joi.boolean(),
+}).min(1).unknown(false)
 
 const createCountry = Joi.object({
   isoCode: Joi.string().trim().uppercase().length(2).required(),
@@ -165,6 +183,53 @@ const createSlots = Joi.object({
   vehicleTypeId: Joi.string().hex().length(24).allow(null),
 })
 
+// ── Rack management (§6/§7 of the platform brief) ───────────────────────
+const createRack = Joi.object({
+  locationId: Joi.string().hex().length(24).required(),
+  code: Joi.string().trim().min(1).max(20).required(),
+  name: Joi.string().trim().max(80).allow('', null),
+  zone: Joi.string().trim().max(40).allow('', null),
+  allowedItemTypes: Joi.array().items(Joi.string().valid(...RACK_ITEM_TYPES)).unique(),
+})
+
+const updateRack = Joi.object({
+  name: Joi.string().trim().max(80).allow('', null),
+  zone: Joi.string().trim().max(40).allow('', null),
+  allowedItemTypes: Joi.array().items(Joi.string().valid(...RACK_ITEM_TYPES)).unique(),
+  status: Joi.string().valid('ACTIVE', 'MAINTENANCE', 'BLOCKED'),
+}).min(1)
+
+const rackSlotDimensions = Joi.object({
+  lengthCm: Joi.number().positive(),
+  widthCm: Joi.number().positive(),
+  heightCm: Joi.number().positive(),
+})
+
+const createRackSlots = Joi.object({
+  slots: Joi.array().items(Joi.object({
+    slotCode: Joi.string().trim().min(1).max(20).required(),
+    allowedItemTypes: Joi.array().items(Joi.string().valid(...RACK_ITEM_TYPES)).unique(),
+    maxWeightKg: Joi.number().positive(),
+    dimensions: rackSlotDimensions,
+    securityLevel: Joi.string().valid('STANDARD', 'HIGH'),
+  })).min(1).max(500).required(),
+})
+
+const assignRackSlot = Joi.object({
+  itemType: Joi.string().valid(...RACK_ITEM_TYPES).required(),
+  itemRef: Joi.string().trim().min(1).max(120).required(),
+  reason: Joi.string().trim().max(300).allow('', null),
+})
+
+const releaseRackSlot = Joi.object({
+  reason: Joi.string().trim().max(300).allow('', null),
+})
+
+const updateRackSlotStatus = Joi.object({
+  status: Joi.string().valid('AVAILABLE', 'RESERVED', 'BLOCKED', 'MAINTENANCE').required(),
+  reason: Joi.string().trim().min(3).max(300).required(),
+})
+
 // ── Tokens (§6, §7) ──────────────────────────────────────────────────────
 const provisionTokenBatch = Joi.object({
   locationId: Joi.string().hex().length(24).required(),
@@ -282,12 +347,19 @@ module.exports = {
   platformLogin,
   createOrganization,
   updateOrganizationStatus,
+  updateOrganizationModules,
   createCountry,
   updateOrg,
   createLocation,
   updateLocation,
   createParkingArea,
   createSlots,
+  createRack,
+  updateRack,
+  createRackSlots,
+  assignRackSlot,
+  releaseRackSlot,
+  updateRackSlotStatus,
   createStaff,
   updateStaff,
   updateOwnStaff,

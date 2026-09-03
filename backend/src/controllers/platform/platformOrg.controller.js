@@ -113,4 +113,42 @@ const updateOrganizationStatus = async (req, res, next) => {
   }
 }
 
-module.exports = { createOrganization, listOrganizations, getOrganization, updateOrganizationStatus }
+/**
+ * PATCH /platform/organizations/:id/modules — Super Admin feature-module
+ * toggle (§2). Deliberately merges only the keys present in req.body onto
+ * the existing modules object, one path at a time, rather than replacing the
+ * whole sub-document (contrast location.controller.js's updateLocation,
+ * which does `Object.assign(location, req.body)` and would silently reset
+ * every unmentioned key back to its schema default) — flipping RACK on must
+ * never risk turning PARKING off as a side effect.
+ */
+const updateOrganizationModules = async (req, res, next) => {
+  try {
+    const org = await Organization.findById(req.params.id)
+    if (!org) return next(createError(404, 'Organization not found', null, 'NOT_FOUND'))
+
+    const oldValue = org.modules.toObject()
+    for (const [key, value] of Object.entries(req.body)) {
+      org.modules[key] = value
+    }
+    await org.save()
+
+    await AuditLog.create({
+      organizationId: org._id,
+      actorId: req.platformAdmin._id,
+      actorRole: 'PLATFORM_ADMIN',
+      actorName: req.platformAdmin.name,
+      action: 'PLATFORM_ORG_MODULES_CHANGED',
+      entityType: 'Organization',
+      entityId: org._id,
+      oldValue,
+      newValue: org.modules.toObject(),
+    })
+
+    res.json({ success: true, message: 'Organization modules updated', data: { organization: org } })
+  } catch (err) {
+    next(err)
+  }
+}
+
+module.exports = { createOrganization, listOrganizations, getOrganization, updateOrganizationStatus, updateOrganizationModules }

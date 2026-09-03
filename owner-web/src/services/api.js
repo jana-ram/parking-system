@@ -18,7 +18,12 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (r) => r,
   (err) => {
-    if (err.response?.status === 401) {
+    // A 401 from the login call itself is a wrong-credentials response, not
+    // an expired session — force-redirecting here would hard-reload the page
+    // before LoginPage's own catch block can show the error toast, making a
+    // bad password look like the form silently did nothing.
+    const isLoginRequest = err.config?.url?.includes('/platform/auth/login')
+    if (err.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem('platform_token')
       window.location.href = '/parking/login'
     }
@@ -40,6 +45,11 @@ export const organizationAPI = {
   get: (id) => api.get(`/platform/organizations/${id}`),
   create: (data) => api.post('/platform/organizations', data),
   updateStatus: (id, status) => api.patch(`/platform/organizations/${id}/status`, { status }),
+  updateModules: (id, modules) => api.patch(`/platform/organizations/${id}/modules`, modules),
+}
+
+export const moduleAPI = {
+  list: () => api.get('/platform/modules'),
 }
 
 export const locationAPI = {

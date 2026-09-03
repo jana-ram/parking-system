@@ -21,6 +21,22 @@ const OrganizationSchema = new mongoose.Schema({
   defaultCurrency: { type: String, required: true, uppercase: true },
   defaultTimezone: { type: String, required: true },
   status: { type: String, enum: ORG_STATUSES, default: 'ACTIVE' },
+  // Super Admin (Platform Admin) module toggles (§2) — enforced server-side
+  // by requireFeature.middleware.js, not just hidden in a UI. Named boolean
+  // paths (not a Mixed/Map) so Mongoose casts/validates each key, matching
+  // Location.js's `features` sub-schema convention. Registry of valid keys
+  // lives in config/modules.js.
+  modules: {
+    PARKING: { type: Boolean, default: true },
+    RACK: { type: Boolean, default: false },
+    LUGGAGE: { type: Boolean, default: false },
+    PARCEL: { type: Boolean, default: false },
+    BILLING: { type: Boolean, default: false },
+    REPORTS: { type: Boolean, default: true },
+    NOTIFICATIONS: { type: Boolean, default: false },
+    CUSTOMER_SELF_SERVICE: { type: Boolean, default: false },
+    AI_ASSISTANT: { type: Boolean, default: false },
+  },
 }, { timestamps: true })
 
 OrganizationSchema.statics.STATUSES = ORG_STATUSES

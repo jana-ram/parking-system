@@ -36,6 +36,16 @@ export default defineConfig({
         target: 'http://localhost:7000',
         changeOrigin: true
       },
+      // Mirrors the production nginx rule that strips /parking-api before
+      // forwarding to the backend (services/api.js always calls
+      // `${VITE_API_URL}/parking-api/...`) — local dev has no nginx in
+      // front, so the dev server does the same strip when VITE_API_URL is
+      // left empty (.env.local), routing calls to the local backend here.
+      '/parking-api': {
+        target: 'http://localhost:7000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/parking-api/, '')
+      },
       '/socket.io': {
         target: 'http://localhost:7000',
         ws: true,

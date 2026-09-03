@@ -2,13 +2,14 @@ const express = require('express')
 const router = express.Router()
 const { protect, authorize } = require('../middleware/auth.middleware')
 const deviceCheck = require('../middleware/deviceCheck.middleware')
+const requireFeature = require('../middleware/requireFeature.middleware')
 const shiftCheck = require('../middleware/shiftCheck.middleware')
 const locationCheck = require('../middleware/locationCheck.middleware')
 const validate = require('../middleware/validate.middleware')
 const { sessionEntry, sessionExitRequest, sessionPayment, sessionCancel } = require('../middleware/schemas')
 const ctrl = require('../controllers/session.controller')
 
-router.use(protect, deviceCheck)
+router.use(protect, deviceCheck, requireFeature('PARKING'))
 
 // Read-only — no active shift required to search/browse (§4).
 router.get('/active', ctrl.listActiveSessions)

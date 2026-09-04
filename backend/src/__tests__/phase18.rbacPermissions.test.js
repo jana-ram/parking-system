@@ -191,4 +191,52 @@ describe('authorizeOrPermission on pricing-rule routes', () => {
     })
     expect(res.status).toBe(403)
   })
+
+  test('PATCH /vehicle-types/:id renames and deactivates (previously a dead mobile call — no matching route existed)', async () => {
+    const code = 'rbac-vt-patch'
+    await onboardOrg(app, { platformToken, code, countryId, adminPhone: '9800000041' })
+    const { token: adminToken } = await staffLogin(app, code, '9800000041', 'Admin@123')
+    const deviceUuid = 'device-rbac-vt-patch'
+    const deviceSecret = await registerDevice(app, adminToken, deviceUuid)
+
+    const createRes = await signedReq(app, 'post', '/vehicle-types', { token: adminToken, deviceUuid, deviceSecret, body: { code: 'CAR', name: 'Car' } })
+    expect(createRes.body.data.vehicleType.status).toBe('ACTIVE')
+    const vehicleTypeId = createRes.body.data.vehicleType._id
+
+    const renameRes = await signedReq(app, 'patch', `/vehicle-types/${vehicleTypeId}`, {
+      token: adminToken, deviceUuid, deviceSecret, body: { name: 'Sedan' },
+    })
+    expect(renameRes.status).toBe(200)
+    expect(renameRes.body.data.vehicleType.name).toBe('Sedan')
+
+    const deactivateRes = await signedReq(app, 'patch', `/vehicle-types/${vehicleTypeId}`, {
+      token: adminToken, deviceUuid, deviceSecret, body: { status: 'INACTIVE' },
+    })
+    expect(deactivateRes.status).toBe(200)
+    expect(deactivateRes.body.data.vehicleType.status).toBe('INACTIVE')
+
+    const listRes = await signedReq(app, 'get', '/vehicle-types', { token: adminToken, deviceUuid, deviceSecret })
+    expect(listRes.body.data.vehicleTypes.find((v) => v._id === vehicleTypeId)).toBeUndefined()
+  })
+
+  test('PATCH /vehicle-types/:id is blocked for a Manager', async () => {
+    const code = 'rbac-vt-blocked'
+    await onboardOrg(app, { platformToken, code, countryId, adminPhone: '9800000051' })
+    const { token: adminToken } = await staffLogin(app, code, '9800000051', 'Admin@123')
+    const deviceUuid = 'device-rbac-vt-blocked'
+    const deviceSecret = await registerDevice(app, adminToken, deviceUuid)
+    const createRes = await signedReq(app, 'post', '/vehicle-types', { token: adminToken, deviceUuid, deviceSecret, body: { code: 'CAR', name: 'Car' } })
+    const vehicleTypeId = createRes.body.data.vehicleType._id
+
+    await signedReq(app, 'post', '/staff', {
+      token: adminToken, deviceUuid, deviceSecret,
+      body: { name: 'Manager Vee', phone: '9800000059', password: 'Manager@123', role: 'MANAGER' },
+    })
+    const { token: managerToken } = await staffLogin(app, code, '9800000059', 'Manager@123')
+
+    const res = await signedReq(app, 'patch', `/vehicle-types/${vehicleTypeId}`, {
+      token: managerToken, deviceUuid, deviceSecret, body: { name: 'Hacked' },
+    })
+    expect(res.status).toBe(403)
+  })
 })

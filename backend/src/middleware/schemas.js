@@ -143,6 +143,12 @@ const createVehicleType = Joi.object({
   name: Joi.string().trim().min(2).max(60).required(),
 })
 
+const updateVehicleType = Joi.object({
+  code: Joi.string().trim().uppercase().min(2).max(30),
+  name: Joi.string().trim().min(2).max(60),
+  status: Joi.string().valid('ACTIVE', 'INACTIVE'),
+}).min(1)
+
 // ── Pricing (§10, §Q) ────────────────────────────────────────────────────
 const locationCheckSchema = Joi.object({
   lat: Joi.number().min(-90).max(90).required(),
@@ -488,6 +494,7 @@ module.exports = {
   registerDevice,
   deactivateDevice,
   createVehicleType,
+  updateVehicleType,
   createPricingRule,
   createPricingRuleVersion,
   updatePricingRule,

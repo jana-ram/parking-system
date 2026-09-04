@@ -3,6 +3,8 @@ const ShiftTally = require('../models/ShiftTally')
 const ShiftHandover = require('../models/ShiftHandover')
 const ParkingSession = require('../models/ParkingSession')
 const Payment = require('../models/Payment')
+const LuggagePayment = require('../models/LuggagePayment')
+const ParcelPayment = require('../models/ParcelPayment')
 const QrToken = require('../models/QrToken')
 const Incident = require('../models/Incident')
 const shiftStateMachine = require('../domain/shiftStateMachine')
@@ -30,9 +32,17 @@ function requiresApproval(varianceMinor) {
  * are placeholder zeros — there is no discount/correction-recording feature
  * built yet (Corrections model exists but nothing writes to it yet); wiring
  * those in is separate, real work, not silently faked here as nonzero.
+ *
+ * Expected totals fold in LuggagePayment/ParcelPayment alongside Payment
+ * (Parking) — all three are cash a staff member physically held during this
+ * same shiftInstanceId. Omitting Luggage/Parcel here was a real reconciliation
+ * gap: cash collected for a luggage/parcel pickup sat outside expectedCashMinor
+ * entirely, so it either manufactured a phantom "surplus" variance when
+ * declared, or vanished with zero variance raised when it wasn't — exactly
+ * the kind of leak a cash tally is supposed to catch.
  */
 async function computeTally({ organizationId, shiftInstanceId, actualCashMinor }) {
-  const [entriesCount, exitsCount, cancellationsCount, paymentAgg, refundAgg] = await Promise.all([
+  const [entriesCount, exitsCount, cancellationsCount, paymentAgg, refundAgg, luggagePaymentAgg, luggageRefundAgg, parcelPaymentAgg, parcelRefundAgg] = await Promise.all([
     ParkingSession.countDocuments({ organizationId, entryShiftInstanceId: shiftInstanceId }),
     ParkingSession.countDocuments({ organizationId, exitShiftInstanceId: shiftInstanceId, status: 'COMPLETED' }),
     ParkingSession.countDocuments({ organizationId, entryShiftInstanceId: shiftInstanceId, status: 'CANCELLED' }),
@@ -44,16 +54,35 @@ async function computeTally({ organizationId, shiftInstanceId, actualCashMinor }
       { $match: { shiftInstanceId, status: 'REFUNDED' } },
       { $group: { _id: null, total: { $sum: '$amountMinor' } } },
     ]),
+    LuggagePayment.aggregateScoped(organizationId, [
+      { $match: { shiftInstanceId, status: 'PAID' } },
+      { $group: { _id: '$method', total: { $sum: '$amountMinor' } } },
+    ]),
+    LuggagePayment.aggregateScoped(organizationId, [
+      { $match: { shiftInstanceId, status: 'REFUNDED' } },
+      { $group: { _id: null, total: { $sum: '$amountMinor' } } },
+    ]),
+    ParcelPayment.aggregateScoped(organizationId, [
+      { $match: { shiftInstanceId, status: 'PAID' } },
+      { $group: { _id: '$method', total: { $sum: '$amountMinor' } } },
+    ]),
+    ParcelPayment.aggregateScoped(organizationId, [
+      { $match: { shiftInstanceId, status: 'REFUNDED' } },
+      { $group: { _id: null, total: { $sum: '$amountMinor' } } },
+    ]),
   ])
 
-  const byMethod = Object.fromEntries(paymentAgg.map((r) => [r._id, r.total]))
+  const byMethod = {}
+  for (const rows of [paymentAgg, luggagePaymentAgg, parcelPaymentAgg]) {
+    for (const r of rows) byMethod[r._id] = (byMethod[r._id] || 0) + r.total
+  }
   const expectedCashMinor = byMethod.CASH || 0
   const expectedUpiMinor = byMethod.UPI || 0
   // OTHER is folded into the card bucket — the schema has only three expected-*
   // fields (cash/upi/card), matching §15's worked example; a fourth "other"
   // bucket is a reasonable future addition, not done here without a concrete need.
   const expectedCardMinor = (byMethod.CARD || 0) + (byMethod.OTHER || 0)
-  const refundsMinor = refundAgg[0]?.total || 0
+  const refundsMinor = (refundAgg[0]?.total || 0) + (luggageRefundAgg[0]?.total || 0) + (parcelRefundAgg[0]?.total || 0)
   const varianceMinor = actualCashMinor - expectedCashMinor
 
   return {

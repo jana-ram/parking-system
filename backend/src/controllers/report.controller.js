@@ -258,39 +258,106 @@ const exportStaffCollectionCsv = async (req, res, next) => {
 /**
  * GET /reports/shifts/:id/transactions — the §22 "Total Collection ₹25,450
  * -> 326 transactions" drill-down: every session (with its payments) that
- * ran under a given shift, whether opened or closed during it.
+ * ran under a given shift, whether opened or closed during it. Also pulls in
+ * every Luggage/Parcel payment recorded under the same shift — cash for a
+ * luggage/parcel pickup is just as much "this shift's money" as a parking
+ * payment (see shift.service.js's computeTally, which now reconciles it the
+ * same way), so leaving it out here would make the drill-down disagree with
+ * the tally it's supposed to explain.
  */
-const getShiftTransactions = async (req, res, next) => {
-  try {
-    const organizationId = req.staffUser.organizationId
-    const shift = await ShiftInstance.findOne({ _id: req.params.id, organizationId })
-    if (!shift) return next(createError(404, 'Shift not found', null, 'NOT_FOUND'))
+async function buildShiftTransactions(req) {
+  const organizationId = req.staffUser.organizationId
+  const shift = await ShiftInstance.findOne({ _id: req.params.id, organizationId })
+  if (!shift) throw createError(404, 'Shift not found', null, 'NOT_FOUND')
 
-    const sessions = await ParkingSession.find({
+  const [sessions, payments, luggagePayments, parcelPayments] = await Promise.all([
+    ParkingSession.find({
       organizationId,
       $or: [{ entryShiftInstanceId: shift._id }, { exitShiftInstanceId: shift._id }],
     })
       .sort({ entryAt: -1 })
-      .populate({ path: 'vehicleId', select: 'vehicleNumber', match: { organizationId } })
+      .populate({ path: 'vehicleId', select: 'vehicleNumber', match: { organizationId } }),
+    Payment.find({ organizationId, shiftInstanceId: shift._id }),
+    LuggagePayment.find({ organizationId, shiftInstanceId: shift._id }).populate({ path: 'orderId', select: 'orderCode customerName', match: { organizationId } }),
+    ParcelPayment.find({ organizationId, shiftInstanceId: shift._id }).populate({ path: 'orderId', select: 'orderCode receiverName', match: { organizationId } }),
+  ])
 
-    const payments = await Payment.find({ organizationId, shiftInstanceId: shift._id })
+  const paymentsBySession = {}
+  for (const p of payments) {
+    const key = String(p.parkingSessionId)
+    ;(paymentsBySession[key] ??= []).push({
+      id: p._id, method: p.method, status: p.status, amountMinor: p.amountMinor,
+      discountMinor: p.discountMinor, discountReason: p.discountReason, createdAt: p.createdAt,
+    })
+  }
 
-    const paymentsBySession = {}
-    for (const p of payments) {
-      const key = String(p.parkingSessionId)
-      ;(paymentsBySession[key] ??= []).push({
-        id: p._id, method: p.method, status: p.status, amountMinor: p.amountMinor,
-        discountMinor: p.discountMinor, discountReason: p.discountReason, createdAt: p.createdAt,
-      })
-    }
+  const parkingTransactions = sessions.map((s) => ({
+    module: 'PARKING', sessionId: s._id, vehicleNumber: s.vehicleId?.vehicleNumber ?? null, status: s.status,
+    entryAt: s.entryAt, exitAt: s.exitAt, amountDueMinor: s.amountDueMinor, amountPaidMinor: s.amountPaidMinor,
+    payments: paymentsBySession[String(s._id)] || [],
+  }))
 
-    const transactions = sessions.map((s) => ({
-      sessionId: s._id, vehicleNumber: s.vehicleId?.vehicleNumber ?? null, status: s.status,
-      entryAt: s.entryAt, exitAt: s.exitAt, amountDueMinor: s.amountDueMinor, amountPaidMinor: s.amountPaidMinor,
-      payments: paymentsBySession[String(s._id)] || [],
-    }))
+  const luggageTransactions = luggagePayments.map((p) => ({
+    module: 'LUGGAGE', orderId: p.orderId?._id ?? null, orderCode: p.orderId?.orderCode ?? null, customerName: p.orderId?.customerName ?? null,
+    method: p.method, status: p.status, amountMinor: p.amountMinor, createdAt: p.createdAt,
+  }))
 
-    res.json({ success: true, message: 'ok', data: { shiftInstanceId: shift._id, count: transactions.length, transactions } })
+  const parcelTransactions = parcelPayments.map((p) => ({
+    module: 'PARCEL', orderId: p.orderId?._id ?? null, orderCode: p.orderId?.orderCode ?? null, receiverName: p.orderId?.receiverName ?? null,
+    method: p.method, status: p.status, amountMinor: p.amountMinor, createdAt: p.createdAt,
+  }))
+
+  return { shiftInstanceId: shift._id, parkingTransactions, luggageTransactions, parcelTransactions }
+}
+
+const getShiftTransactions = async (req, res, next) => {
+  try {
+    const { shiftInstanceId, parkingTransactions, luggageTransactions, parcelTransactions } = await buildShiftTransactions(req)
+    res.json({
+      success: true,
+      message: 'ok',
+      data: {
+        shiftInstanceId,
+        count: parkingTransactions.length + luggageTransactions.length + parcelTransactions.length,
+        // `transactions` kept as the existing field name (Parking-only) so
+        // current callers reading it directly don't silently change shape;
+        // the two new arrays are additive.
+        transactions: parkingTransactions,
+        luggageTransactions,
+        parcelTransactions,
+      },
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// GET /reports/shifts/:id/transactions/export — CSV of the same combined
+// per-shift drill-down, one row per transaction across all three modules.
+const exportShiftTransactionsCsv = async (req, res, next) => {
+  try {
+    const { parkingTransactions, luggageTransactions, parcelTransactions } = await buildShiftTransactions(req)
+
+    const rows = [
+      ...parkingTransactions.flatMap((t) => (t.payments.length ? t.payments.map((p) => ({ ...t, ...p, paymentAmountMinor: p.amountMinor })) : [{ ...t, paymentAmountMinor: null, method: null }])),
+      ...luggageTransactions.map((t) => ({ ...t, paymentAmountMinor: t.amountMinor })),
+      ...parcelTransactions.map((t) => ({ ...t, paymentAmountMinor: t.amountMinor })),
+    ]
+
+    const csv = toCsv(rows, [
+      { label: 'Module', value: (r) => r.module },
+      { label: 'Reference', value: (r) => r.vehicleNumber ?? r.orderCode ?? r.sessionId ?? '' },
+      { label: 'Customer', value: (r) => r.customerName ?? r.receiverName ?? '' },
+      { label: 'Method', value: (r) => r.method ?? '' },
+      { label: 'Status', value: (r) => r.status ?? '' },
+      { label: 'Amount (minor units)', value: (r) => r.paymentAmountMinor ?? '' },
+      { label: 'Amount', value: (r) => (r.paymentAmountMinor != null ? (r.paymentAmountMinor / 100).toFixed(2) : '') },
+      { label: 'Recorded At', value: (r) => r.createdAt?.toISOString?.() ?? r.createdAt ?? '' },
+    ])
+
+    res.set('Content-Type', 'text/csv')
+    res.set('Content-Disposition', 'attachment; filename="shift-transactions.csv"')
+    res.send(csv)
   } catch (err) {
     next(err)
   }
@@ -317,6 +384,41 @@ const getCorrections = async (req, res, next) => {
       .populate({ path: 'requestedBy', select: 'name', match: { organizationId: req.staffUser.organizationId } })
 
     res.json({ success: true, message: 'ok', data: { corrections } })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// GET /reports/corrections/export — CSV of the same manual-override audit
+// trail getCorrections returns.
+const exportCorrectionsCsv = async (req, res, next) => {
+  try {
+    const { from, to, entityType } = req.query
+    const filter = { organizationId: req.staffUser.organizationId }
+    if (entityType) filter.entityType = entityType
+    if (from || to) {
+      filter.createdAt = {}
+      if (from) filter.createdAt.$gte = new Date(from)
+      if (to) filter.createdAt.$lte = new Date(to)
+    }
+
+    const corrections = await Correction.find(filter).sort({ createdAt: -1 }).limit(500)
+      .populate({ path: 'requestedBy', select: 'name', match: { organizationId: req.staffUser.organizationId } })
+
+    const csv = toCsv(corrections, [
+      { label: 'Entity Type', value: (r) => r.entityType },
+      { label: 'Entity ID', value: (r) => r.entityId },
+      { label: 'Field', value: (r) => r.field },
+      { label: 'Old Value', value: (r) => r.oldValue },
+      { label: 'New Value', value: (r) => r.newValue },
+      { label: 'Reason', value: (r) => r.reason },
+      { label: 'Requested By', value: (r) => r.requestedBy?.name ?? '' },
+      { label: 'Recorded At', value: (r) => r.createdAt?.toISOString?.() ?? r.createdAt },
+    ])
+
+    res.set('Content-Type', 'text/csv')
+    res.set('Content-Disposition', 'attachment; filename="corrections.csv"')
+    res.send(csv)
   } catch (err) {
     next(err)
   }
@@ -354,4 +456,7 @@ const exportSummaryCsv = async (req, res, next) => {
   }
 }
 
-module.exports = { getSummary, exportSummaryCsv, getStaffCollection, exportStaffCollectionCsv, getShiftTransactions, getCorrections }
+module.exports = {
+  getSummary, exportSummaryCsv, getStaffCollection, exportStaffCollectionCsv,
+  getShiftTransactions, exportShiftTransactionsCsv, getCorrections, exportCorrectionsCsv,
+}

@@ -14,6 +14,8 @@ router.get('/summary/export', ctrl.exportSummaryCsv)
 router.get('/staff-collection', ctrl.getStaffCollection)
 router.get('/staff-collection/export', ctrl.exportStaffCollectionCsv)
 router.get('/shifts/:id/transactions', ctrl.getShiftTransactions)
+router.get('/shifts/:id/transactions/export', ctrl.exportShiftTransactionsCsv)
 router.get('/corrections', ctrl.getCorrections)
+router.get('/corrections/export', ctrl.exportCorrectionsCsv)
 
 module.exports = router

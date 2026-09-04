@@ -5,15 +5,15 @@ const auditLog = require('../services/auditLog.service')
 const { createError } = require('../utils/helpers')
 
 const PROFILE_FIELDS = 'name phone email role status createdAt lastLogin'
-// listStaff's own select additionally needs permissionOverrides (§3/§O) so
-// an Org Admin's Staff screen can show/edit a named permission exception —
-// PROFILE_FIELDS itself stays as-is since getMe/updateMe (self-service)
-// have no business surfacing another field only Org Admin should manage.
+// listStaff (Org Admin's roster view, to show/edit another account's
+// exception) and getMe (§3/§O: a Manager/Staff needs to see their OWN
+// GRANT/DENY overrides — e.g. 'pricing.edit' — so the app can show/hide
+// write actions before the API 403s them, not after) both need this.
 const LIST_FIELDS = `${PROFILE_FIELDS} permissionOverrides`
 
 const getMe = async (req, res, next) => {
   try {
-    const staff = await StaffUser.findOne({ _id: req.staffUser._id, organizationId: req.staffUser.organizationId }).select(PROFILE_FIELDS)
+    const staff = await StaffUser.findOne({ _id: req.staffUser._id, organizationId: req.staffUser.organizationId }).select(LIST_FIELDS)
     if (!staff) return next(createError(404, 'Staff account not found', null, 'NOT_FOUND'))
     res.json({ success: true, message: 'ok', data: { staff: { id: staff._id, ...staff.toObject({ versionKey: false }) } } })
   } catch (err) {

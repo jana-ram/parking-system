@@ -83,6 +83,12 @@ describe('authorizeOrPermission on pricing-rule routes', () => {
     const allowedRes = await signedReq(app, 'post', '/pricing-rules', { token: managerToken, deviceUuid, deviceSecret, body: pricingBody })
     expect(allowedRes.status).toBe(201)
 
+    // GET /staff/me must reflect the Manager's OWN grant — otherwise the app
+    // has no way to show the "New Pricing Rule" button before the API 403s it.
+    const meRes = await signedReq(app, 'get', '/staff/me', { token: managerToken, deviceUuid, deviceSecret })
+    expect(meRes.status).toBe(200)
+    expect(meRes.body.data.staff.permissionOverrides).toEqual([expect.objectContaining({ code: 'pricing.edit', effect: 'GRANT' })])
+
     const revokeRes = await signedReq(app, 'patch', `/staff/${managerId}`, {
       token: adminToken, deviceUuid, deviceSecret,
       body: { permissionOverrides: [{ code: 'pricing.edit', effect: 'GRANT' }, { code: 'pricing.edit', effect: 'DENY' }] },

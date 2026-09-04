@@ -168,6 +168,31 @@ describe('C1: shift transaction drill-down lists Luggage/Parcel payments alongsi
   });
 });
 
+describe('C1b: summary report exposes per-module revenueByMethod and overdueCount', () => {
+  test('GET /reports/summary gives each module its own revenueByMethod and an overdue snapshot count', async () => {
+    const ctx = await setUpOrgWithLuggage('xmod-kpi', '9600000031')
+
+    const overdueOrderRes = await signedReq(app, 'post', '/luggage-orders', {
+      token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret,
+      body: { locationId: ctx.locationId, customerName: 'Overdue KPI', customerPhone: '9999999995', ratePerDayMinor: 5000, expectedPickupAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() },
+    })
+    await signedReq(app, 'post', `/luggage-orders/${overdueOrderRes.body.data.order._id}/payment`, {
+      token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret,
+      body: { method: 'UPI', amountMinor: 2500, clientTransactionId: 'ctx-xmod-kpi-1' },
+    })
+
+    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const to = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    const res = await signedReq(app, 'get', '/reports/summary', { token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret, query: { from, to } })
+
+    expect(res.status).toBe(200)
+    expect(res.body.data.byModule.luggage.revenueByMethod.UPI.totalMinor).toBe(2500)
+    expect(res.body.data.byModule.parking.revenueByMethod).toEqual({})
+    expect(res.body.data.byModule.luggage.overdueCount).toBe(1)
+    expect(res.body.data.byModule.parcel.overdueCount).toBe(0)
+  });
+});
+
 describe('C2: corrections CSV export', () => {
   test('GET /reports/corrections/export returns a CSV of the override', async () => {
     const ctx = await setUpOrgWithLuggage('xmod-corr-export', '9600000021')

@@ -65,10 +65,11 @@ const getSummary = async (req, res, next) => {
     const sessionMatch = { entryAt: { $gte: fromDate, $lte: toDate } }
     if (locationObjectId) sessionMatch.locationId = locationObjectId
 
+    const now = new Date()
     const [
       entryStats, exitStats, byVehicleType, parkingPaymentStats,
-      luggagePaymentStats, luggageOrderCounts,
-      parcelPaymentStats, parcelOrderCounts,
+      luggagePaymentStats, luggageOrderCounts, luggageOverdueStats,
+      parcelPaymentStats, parcelOrderCounts, parcelOverdueStats,
     ] = await Promise.all([
       ParkingSession.aggregateScoped(organizationId, [{ $match: sessionMatch }, { $count: 'count' }]),
       ParkingSession.aggregateScoped(organizationId, [{ $match: { ...sessionMatch, status: 'COMPLETED' } }, { $count: 'count' }]),
@@ -94,6 +95,13 @@ const getSummary = async (req, res, next) => {
         { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
+      // Overdue is a right-now snapshot (same idea as "Currently Parked"),
+      // not scoped to the from/to range — a customer's item doesn't stop
+      // being overdue just because the report window ended yesterday.
+      LuggageOrder.aggregateScoped(organizationId, [
+        { $match: { status: 'ACTIVE', expectedPickupAt: { $lt: now }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $count: 'count' },
+      ]),
       ParcelPayment.aggregateScoped(organizationId, [
         { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
         { $group: { _id: '$method', totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
@@ -101,6 +109,10 @@ const getSummary = async (req, res, next) => {
       ParcelOrder.aggregateScoped(organizationId, [
         { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      ParcelOrder.aggregateScoped(organizationId, [
+        { $match: { status: 'ACTIVE', expectedPickupAt: { $lt: now }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $count: 'count' },
       ]),
     ])
 
@@ -118,11 +130,15 @@ const getSummary = async (req, res, next) => {
         // Combined, across every module — the top-line "everything" figure.
         totalRevenueMinor: parkingRevenueMinor + luggageRevenueMinor + parcelRevenueMinor,
         revenueByMethod: mergeByMethod(parkingPaymentStats, luggagePaymentStats, parcelPaymentStats),
-        // Per-type breakdown — the same total, never hidden behind a single number.
+        // Per-type breakdown — the same total, never hidden behind a single
+        // number. Each module also carries its OWN revenueByMethod (not just
+        // the merged top-level one) so a client-side "Parking / Luggage /
+        // Parcel" report filter can switch what it displays without a
+        // separate round-trip per type.
         byModule: {
-          parking: { revenueMinor: parkingRevenueMinor, vehiclesEntered: entryStats[0]?.count ?? 0, vehiclesExited: exitStats[0]?.count ?? 0 },
-          luggage: { revenueMinor: luggageRevenueMinor, orders: countsOf(luggageOrderCounts) },
-          parcel: { revenueMinor: parcelRevenueMinor, orders: countsOf(parcelOrderCounts) },
+          parking: { revenueMinor: parkingRevenueMinor, vehiclesEntered: entryStats[0]?.count ?? 0, vehiclesExited: exitStats[0]?.count ?? 0, revenueByMethod: mergeByMethod(parkingPaymentStats) },
+          luggage: { revenueMinor: luggageRevenueMinor, orders: countsOf(luggageOrderCounts), overdueCount: luggageOverdueStats[0]?.count ?? 0, revenueByMethod: mergeByMethod(luggagePaymentStats) },
+          parcel: { revenueMinor: parcelRevenueMinor, orders: countsOf(parcelOrderCounts), overdueCount: parcelOverdueStats[0]?.count ?? 0, revenueByMethod: mergeByMethod(parcelPaymentStats) },
         },
         // Kept at top level too — existing callers (mobile ReportsScreen)
         // already read these two fields directly.
@@ -436,8 +452,8 @@ const exportSummaryCsv = async (req, res, next) => {
 
     const rows = [
       { module: 'Parking', revenueMinor: summary.byModule.parking.revenueMinor, detail: `${summary.byModule.parking.vehiclesEntered} entered / ${summary.byModule.parking.vehiclesExited} exited` },
-      { module: 'Luggage', revenueMinor: summary.byModule.luggage.revenueMinor, detail: JSON.stringify(summary.byModule.luggage.orders) },
-      { module: 'Parcel', revenueMinor: summary.byModule.parcel.revenueMinor, detail: JSON.stringify(summary.byModule.parcel.orders) },
+      { module: 'Luggage', revenueMinor: summary.byModule.luggage.revenueMinor, detail: `${JSON.stringify(summary.byModule.luggage.orders)} · ${summary.byModule.luggage.overdueCount} overdue` },
+      { module: 'Parcel', revenueMinor: summary.byModule.parcel.revenueMinor, detail: `${JSON.stringify(summary.byModule.parcel.orders)} · ${summary.byModule.parcel.overdueCount} overdue` },
       { module: 'TOTAL', revenueMinor: summary.totalRevenueMinor, detail: '' },
     ]
 

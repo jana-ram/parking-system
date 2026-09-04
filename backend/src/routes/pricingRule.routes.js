@@ -4,7 +4,7 @@ const { protect, authorizeOrPermission } = require('../middleware/auth.middlewar
 const deviceCheck = require('../middleware/deviceCheck.middleware')
 const requireFeature = require('../middleware/requireFeature.middleware')
 const validate = require('../middleware/validate.middleware')
-const { createPricingRule, createPricingRuleVersion } = require('../middleware/schemas')
+const { createPricingRule, createPricingRuleVersion, updatePricingRule } = require('../middleware/schemas')
 const ctrl = require('../controllers/pricingRule.controller')
 
 router.use(protect, deviceCheck, requireFeature('PARKING'))
@@ -17,5 +17,6 @@ router.get('/:id/preview', ctrl.previewPricing)
 // for, without adding a new hardcoded role.
 router.post('/', authorizeOrPermission(['ORG_ADMIN'], 'pricing.edit'), validate(createPricingRule), ctrl.createPricingRule)
 router.post('/:id/versions', authorizeOrPermission(['ORG_ADMIN'], 'pricing.edit'), validate(createPricingRuleVersion), ctrl.createPricingRuleVersion)
+router.patch('/:id', authorizeOrPermission(['ORG_ADMIN'], 'pricing.edit'), validate(updatePricingRule), ctrl.updatePricingRule)
 
 module.exports = router

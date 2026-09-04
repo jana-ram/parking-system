@@ -101,6 +101,35 @@ const createPricingRuleVersion = async (req, res, next) => {
 }
 
 /**
+ * PATCH /pricing-rules/:id — rename and/or archive only. A rate CHANGE is
+ * never made here — it always goes through createPricingRuleVersion above,
+ * so every ParkingSession keeps pointing at the exact immutable version it
+ * was priced with. This existed as a mobile API call with no matching route
+ * for a while (a real dead-end, not a design gap) — added to close it.
+ */
+const updatePricingRule = async (req, res, next) => {
+  try {
+    const rule = await ParkingPricingRule.findOne({ _id: req.params.id, organizationId: req.staffUser.organizationId })
+    if (!rule) return next(createError(404, 'Pricing rule not found', null, 'NOT_FOUND'))
+
+    const { name, status } = req.body
+    const oldValue = { name: rule.name, status: rule.status }
+    if (name !== undefined) rule.name = name
+    if (status !== undefined) rule.status = status
+    await rule.save()
+
+    await auditLog.record(req, {
+      action: 'PRICING_RULE_UPDATED', entityType: 'ParkingPricingRule', entityId: rule._id,
+      oldValue, newValue: { name: rule.name, status: rule.status },
+    })
+
+    res.json({ success: true, message: 'Pricing rule updated', data: { pricingRule: rule } })
+  } catch (err) {
+    next(err)
+  }
+}
+
+/**
  * GET /pricing-rules/:id/preview?entryAt=...&exitAt=... — quote calc without
  * creating a session. Uses the exact same domain functions real entry/exit
  * will use, so a preview can never diverge from what a real session would be
@@ -132,4 +161,4 @@ const previewPricing = async (req, res, next) => {
   }
 }
 
-module.exports = { listPricingRules, createPricingRule, createPricingRuleVersion, previewPricing }
+module.exports = { listPricingRules, createPricingRule, createPricingRuleVersion, updatePricingRule, previewPricing }

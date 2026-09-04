@@ -178,6 +178,14 @@ const createPricingRuleVersion = Joi.object({
   effectiveFrom: Joi.date().iso(),
 })
 
+// Rename/archive only — a config change is always a new immutable version
+// (createPricingRuleVersion above), never an in-place edit here (see
+// pricingRule.controller.js's header comment on why).
+const updatePricingRule = Joi.object({
+  name: Joi.string().trim().min(2).max(120),
+  status: Joi.string().valid('ACTIVE', 'ARCHIVED'),
+}).min(1)
+
 // ── Parking areas / slots (configurable slot-assignment feature) ────────
 const createParkingArea = Joi.object({
   locationId: Joi.string().hex().length(24).required(),
@@ -482,6 +490,7 @@ module.exports = {
   createVehicleType,
   createPricingRule,
   createPricingRuleVersion,
+  updatePricingRule,
   provisionTokenBatch,
   reinstateToken,
   markTokenStatus,

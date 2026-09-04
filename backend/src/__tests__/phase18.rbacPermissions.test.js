@@ -121,4 +121,74 @@ describe('authorizeOrPermission on pricing-rule routes', () => {
     })
     expect(res.status).toBe(201)
   })
+
+  test('PATCH /pricing-rules/:id renames and archives a rule (previously a dead mobile call — no matching route existed)', async () => {
+    const code = 'rbac-patch'
+    await onboardOrg(app, { platformToken, code, countryId, adminPhone: '9800000021' })
+    const { token: adminToken } = await staffLogin(app, code, '9800000021', 'Admin@123')
+    const deviceUuid = 'device-rbac-patch'
+    const deviceSecret = await registerDevice(app, adminToken, deviceUuid)
+    const locRes = await signedReq(app, 'post', '/locations', {
+      token: adminToken, deviceUuid, deviceSecret,
+      body: { countryId, name: 'Patch Lot', geo: { lat: 12.9716, lng: 77.5946 }, timezone: 'Asia/Kolkata', currency: 'INR', geofenceRadiusM: 150 },
+    })
+    const locationId = locRes.body.data.location._id
+    const vtRes = await signedReq(app, 'post', '/vehicle-types', { token: adminToken, deviceUuid, deviceSecret, body: { code: 'CAR', name: 'Car' } })
+    const vehicleTypeId = vtRes.body.data.vehicleType._id
+
+    const createRes = await signedReq(app, 'post', '/pricing-rules', {
+      token: adminToken, deviceUuid, deviceSecret,
+      body: { locationId, vehicleTypeId, mode: 'PAY_ON_ENTRY', name: 'Flat', config: { flatAmountMinor: 500 } },
+    })
+    const ruleId = createRes.body.data.pricingRule._id
+
+    const renameRes = await signedReq(app, 'patch', `/pricing-rules/${ruleId}`, {
+      token: adminToken, deviceUuid, deviceSecret, body: { name: 'Flat Renamed' },
+    })
+    expect(renameRes.status).toBe(200)
+    expect(renameRes.body.data.pricingRule.name).toBe('Flat Renamed')
+    expect(renameRes.body.data.pricingRule.status).toBe('ACTIVE')
+
+    const archiveRes = await signedReq(app, 'patch', `/pricing-rules/${ruleId}`, {
+      token: adminToken, deviceUuid, deviceSecret, body: { status: 'ARCHIVED' },
+    })
+    expect(archiveRes.status).toBe(200)
+    expect(archiveRes.body.data.pricingRule.status).toBe('ARCHIVED')
+
+    // Archived rules drop out of the default (ACTIVE-only) list, same as
+    // listPricingRules's existing filter.
+    const listRes = await signedReq(app, 'get', '/pricing-rules', { token: adminToken, deviceUuid, deviceSecret })
+    expect(listRes.body.data.pricingRules.find((r) => r._id === ruleId)).toBeUndefined()
+  })
+
+  test('PATCH /pricing-rules/:id is blocked for a Manager without pricing.edit', async () => {
+    const code = 'rbac-patch-blocked'
+    await onboardOrg(app, { platformToken, code, countryId, adminPhone: '9800000031' })
+    const { token: adminToken } = await staffLogin(app, code, '9800000031', 'Admin@123')
+    const deviceUuid = 'device-rbac-patch-blocked'
+    const deviceSecret = await registerDevice(app, adminToken, deviceUuid)
+    const locRes = await signedReq(app, 'post', '/locations', {
+      token: adminToken, deviceUuid, deviceSecret,
+      body: { countryId, name: 'Blocked Lot', geo: { lat: 12.9716, lng: 77.5946 }, timezone: 'Asia/Kolkata', currency: 'INR', geofenceRadiusM: 150 },
+    })
+    const locationId = locRes.body.data.location._id
+    const vtRes = await signedReq(app, 'post', '/vehicle-types', { token: adminToken, deviceUuid, deviceSecret, body: { code: 'CAR', name: 'Car' } })
+    const vehicleTypeId = vtRes.body.data.vehicleType._id
+    const createRes = await signedReq(app, 'post', '/pricing-rules', {
+      token: adminToken, deviceUuid, deviceSecret,
+      body: { locationId, vehicleTypeId, mode: 'PAY_ON_ENTRY', name: 'Flat', config: { flatAmountMinor: 500 } },
+    })
+    const ruleId = createRes.body.data.pricingRule._id
+
+    const managerRes = await signedReq(app, 'post', '/staff', {
+      token: adminToken, deviceUuid, deviceSecret,
+      body: { name: 'Manager No-Edit', phone: '9800000039', password: 'Manager@123', role: 'MANAGER' },
+    })
+    const { token: managerToken } = await staffLogin(app, code, '9800000039', 'Manager@123')
+
+    const res = await signedReq(app, 'patch', `/pricing-rules/${ruleId}`, {
+      token: managerToken, deviceUuid, deviceSecret, body: { status: 'ARCHIVED' },
+    })
+    expect(res.status).toBe(403)
+  })
 })

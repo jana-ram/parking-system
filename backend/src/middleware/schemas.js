@@ -192,6 +192,26 @@ const updatePricingRule = Joi.object({
   status: Joi.string().valid('ACTIVE', 'ARCHIVED'),
 }).min(1)
 
+// ── Luggage/Parcel pricing (§2 of the platform brief) — one simple mutable
+// rule per module/location, no immutable version history (see
+// ItemPricingRule.js's header for why this is intentionally simpler than
+// Parking's pricing rules).
+const createItemPricingRule = Joi.object({
+  module: Joi.string().valid('LUGGAGE', 'PARCEL').required(),
+  locationId: Joi.string().hex().length(24).allow(null),
+  name: Joi.string().trim().min(2).max(120).required(),
+  unit: Joi.string().valid('HOUR', 'DAY').required(),
+  rateMinor: Joi.number().integer().min(0).required(),
+  maxDays: Joi.number().integer().min(1).allow(null),
+})
+
+const updateItemPricingRule = Joi.object({
+  name: Joi.string().trim().min(2).max(120),
+  rateMinor: Joi.number().integer().min(0),
+  maxDays: Joi.number().integer().min(1).allow(null),
+  status: Joi.string().valid('ACTIVE', 'ARCHIVED'),
+}).min(1)
+
 // ── Parking areas / slots (configurable slot-assignment feature) ────────
 const createParkingArea = Joi.object({
   locationId: Joi.string().hex().length(24).required(),
@@ -252,11 +272,15 @@ const updateRackSlotStatus = Joi.object({
 })
 
 // ── Luggage management (§8 of the platform brief) ───────────────────────
+// §2: either pricingRuleId (resolved server-side to a rate/unit/maxDays) or
+// a manually-typed ratePerDayMinor — never both required, so check-in is
+// never blocked by a missing rule (controller enforces at least one exists).
 const createLuggageOrder = Joi.object({
   locationId: Joi.string().hex().length(24).required(),
   customerName: Joi.string().trim().min(1).max(120).required(),
   customerPhone: Joi.string().trim().min(6).max(20).required(),
-  ratePerDayMinor: Joi.number().integer().min(0).required(),
+  pricingRuleId: Joi.string().hex().length(24),
+  ratePerDayMinor: Joi.number().integer().min(0),
   expectedPickupAt: Joi.date().iso(),
   notes: Joi.string().trim().max(500).allow('', null),
 })
@@ -293,13 +317,15 @@ const releaseLuggageItemRack = Joi.object({
 })
 
 // ── Parcel management (§9 of the platform brief) ────────────────────────
+// See createLuggageOrder's comment — same pricingRuleId-or-manual-rate shape.
 const createParcelOrder = Joi.object({
   locationId: Joi.string().hex().length(24).required(),
   senderName: Joi.string().trim().min(1).max(120).required(),
   senderPhone: Joi.string().trim().max(20).allow('', null),
   receiverName: Joi.string().trim().min(1).max(120).required(),
   receiverPhone: Joi.string().trim().min(6).max(20).required(),
-  ratePerDayMinor: Joi.number().integer().min(0).required(),
+  pricingRuleId: Joi.string().hex().length(24),
+  ratePerDayMinor: Joi.number().integer().min(0),
   expectedPickupAt: Joi.date().iso(),
   notes: Joi.string().trim().max(500).allow('', null),
 })
@@ -498,6 +524,8 @@ module.exports = {
   createPricingRule,
   createPricingRuleVersion,
   updatePricingRule,
+  createItemPricingRule,
+  updateItemPricingRule,
   provisionTokenBatch,
   reinstateToken,
   markTokenStatus,

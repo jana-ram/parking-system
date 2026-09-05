@@ -18,7 +18,7 @@ const { createError } = require('../utils/helpers')
 // something later payment/pickup calls recompute out from under it.
 function computeAmountDueMinor(order, referenceAt = new Date()) {
   if (order.manualAmountOverrideMinor != null) return order.manualAmountOverrideMinor
-  return luggagePricing.computeAmountDueMinor({ checkInAt: order.receivedAt, ratePerDayMinor: order.ratePerDayMinor }, referenceAt)
+  return luggagePricing.computeAmountDueMinor({ checkInAt: order.receivedAt, ratePerDayMinor: order.ratePerDayMinor, pricingUnit: order.pricingUnit, maxDays: order.maxDays }, referenceAt)
 }
 
 async function overrideAmount({ organizationId, orderId, manualAmountMinor, reason, staffUser, device, shiftInstance }) {

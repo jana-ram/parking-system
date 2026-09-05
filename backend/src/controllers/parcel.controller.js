@@ -1,6 +1,7 @@
 const ParcelOrder = require('../models/ParcelOrder')
 const ParcelItem = require('../models/ParcelItem')
 const Location = require('../models/Location')
+const ItemPricingRule = require('../models/ItemPricingRule')
 const parcelService = require('../services/parcel.service')
 const rackSlotService = require('../services/rackSlot.service')
 const auditLog = require('../services/auditLog.service')
@@ -51,22 +52,36 @@ const getOrderByCode = async (req, res, next) => {
   }
 }
 
+// §2: see luggage.controller.js's createOrder comment — identical
+// pricingRuleId-or-manual-rate resolution.
 const createOrder = async (req, res, next) => {
   try {
-    const { locationId, senderName, senderPhone, receiverName, receiverPhone, ratePerDayMinor, expectedPickupAt, notes } = req.body
+    const { locationId, senderName, senderPhone, receiverName, receiverPhone, pricingRuleId, ratePerDayMinor, expectedPickupAt, notes } = req.body
     const location = await Location.findOne({ _id: locationId, organizationId: req.staffUser.organizationId })
     if (!location) return next(createError(404, 'Location not found', null, 'NOT_FOUND'))
 
+    let resolvedRateMinor = ratePerDayMinor
+    let pricingUnit = 'DAY'
+    let maxDays = null
+    if (pricingRuleId) {
+      const rule = await ItemPricingRule.findOne({ _id: pricingRuleId, organizationId: req.staffUser.organizationId, module: 'PARCEL', status: 'ACTIVE' })
+      if (!rule) return next(createError(404, 'Pricing rule not found or inactive', null, 'NOT_FOUND'))
+      resolvedRateMinor = rule.rateMinor
+      pricingUnit = rule.unit
+      maxDays = rule.maxDays
+    }
+    if (resolvedRateMinor == null) return next(createError(422, 'Either pricingRuleId or ratePerDayMinor is required', null, 'VALIDATION_ERROR'))
+
     const order = await ParcelOrder.create({
       organizationId: req.staffUser.organizationId, locationId, senderName, senderPhone, receiverName, receiverPhone,
-      ratePerDayMinor, currency: location.currency, expectedPickupAt, notes,
+      ratePerDayMinor: resolvedRateMinor, pricingUnit, maxDays, currency: location.currency, expectedPickupAt, notes,
       orderCode: generateEntityCode('PAR-ORD'),
       createdByStaffId: req.staffUser._id, shiftInstanceId: req.shiftInstance._id, deviceId: req.device._id,
     })
 
     await auditLog.record(req, {
       action: 'PARCEL_ORDER_CREATED', entityType: 'ParcelOrder', entityId: order._id,
-      newValue: { receiverName, receiverPhone, ratePerDayMinor }, locationId, shiftInstanceId: req.shiftInstance._id,
+      newValue: { receiverName, receiverPhone, ratePerDayMinor: resolvedRateMinor, pricingUnit }, locationId, shiftInstanceId: req.shiftInstance._id,
     })
 
     res.status(201).json({ success: true, message: 'Parcel order created', data: { order } })

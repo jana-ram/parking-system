@@ -20,6 +20,10 @@ const ParcelOrderSchema = new mongoose.Schema({
   receiverPhone: { type: String, required: true, trim: true },
   status: { type: String, enum: ORDER_STATUSES, default: 'ACTIVE' },
   ratePerDayMinor: { type: Number, required: true },
+  // See LuggageOrder.js's identical fields — snapshotted from the resolved
+  // ItemPricingRule at check-in, or 'DAY'/null when a manual rate was typed.
+  pricingUnit: { type: String, enum: ['HOUR', 'DAY'], default: 'DAY' },
+  maxDays: { type: Number, default: null },
   currency: { type: String, required: true, uppercase: true },
   receivedAt: { type: Date, default: Date.now },
   expectedPickupAt: Date,

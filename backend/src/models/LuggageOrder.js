@@ -9,10 +9,15 @@
  * on by existing report/reconciliation queries — a nullable/polymorphic
  * rework there is a real migration risk this phase doesn't need to take on.
  *
- * Pricing is deliberately a flat per-day rate set at check-in (domain/
- * luggagePricing.js), not the full versioned PricingRuleVersion engine
- * ParkingSession uses (§10/§11) — simplest thing that's still real and
- * auditable; revisit if luggage needs hourly/peak/holiday tiers later.
+ * Pricing resolves from ItemPricingRule.js at check-in (hourly or daily,
+ * §2), or a manually-typed rate if no rule matches — either way the
+ * resolved ratePerDayMinor/pricingUnit/maxDays are snapshotted onto the
+ * order right here, not re-read from the rule later, so editing a rule
+ * never retroactively changes an existing order's charge (domain/
+ * luggagePricing.js does the actual duration/amount math). Simpler than
+ * the full versioned PricingRuleVersion engine ParkingSession uses (§10/
+ * §11) — one mutable rule row is enough since the order-level snapshot is
+ * what carries the audit trail.
  */
 const mongoose = require('mongoose')
 const requireOrgScope = require('../plugins/requireOrgScope')
@@ -27,6 +32,10 @@ const LuggageOrderSchema = new mongoose.Schema({
   customerPhone: { type: String, required: true, trim: true },
   status: { type: String, enum: ORDER_STATUSES, default: 'ACTIVE' },
   ratePerDayMinor: { type: Number, required: true },
+  // Snapshotted from the resolved ItemPricingRule at check-in (or 'DAY'/null
+  // when a manual rate was typed instead, matching pre-existing behavior).
+  pricingUnit: { type: String, enum: ['HOUR', 'DAY'], default: 'DAY' },
+  maxDays: { type: Number, default: null },
   currency: { type: String, required: true, uppercase: true },
   checkInAt: { type: Date, default: Date.now },
   expectedPickupAt: Date,

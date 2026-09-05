@@ -1,6 +1,7 @@
 const LuggageOrder = require('../models/LuggageOrder')
 const LuggageItem = require('../models/LuggageItem')
 const Location = require('../models/Location')
+const ItemPricingRule = require('../models/ItemPricingRule')
 const luggageService = require('../services/luggage.service')
 const rackSlotService = require('../services/rackSlot.service')
 const auditLog = require('../services/auditLog.service')
@@ -58,14 +59,32 @@ const getOrderByCode = async (req, res, next) => {
 
 // POST /luggage-orders — an operational, counter-side write bound to an
 // active shift, same tier as session entry.
+// §2: either resolve pricingRuleId into a rate/unit/maxDays (the fast
+// path — staff pick a rule instead of typing a number), or fall back to a
+// manually-typed ratePerDayMinor exactly as before, so check-in is never
+// blocked by a missing/misconfigured rule. Whichever wins is snapshotted
+// onto the order — see LuggageOrder.js's header for why.
 const createOrder = async (req, res, next) => {
   try {
-    const { locationId, customerName, customerPhone, ratePerDayMinor, expectedPickupAt, notes } = req.body
+    const { locationId, customerName, customerPhone, pricingRuleId, ratePerDayMinor, expectedPickupAt, notes } = req.body
     const location = await Location.findOne({ _id: locationId, organizationId: req.staffUser.organizationId })
     if (!location) return next(createError(404, 'Location not found', null, 'NOT_FOUND'))
 
+    let resolvedRateMinor = ratePerDayMinor
+    let pricingUnit = 'DAY'
+    let maxDays = null
+    if (pricingRuleId) {
+      const rule = await ItemPricingRule.findOne({ _id: pricingRuleId, organizationId: req.staffUser.organizationId, module: 'LUGGAGE', status: 'ACTIVE' })
+      if (!rule) return next(createError(404, 'Pricing rule not found or inactive', null, 'NOT_FOUND'))
+      resolvedRateMinor = rule.rateMinor
+      pricingUnit = rule.unit
+      maxDays = rule.maxDays
+    }
+    if (resolvedRateMinor == null) return next(createError(422, 'Either pricingRuleId or ratePerDayMinor is required', null, 'VALIDATION_ERROR'))
+
     const order = await LuggageOrder.create({
-      organizationId: req.staffUser.organizationId, locationId, customerName, customerPhone, ratePerDayMinor,
+      organizationId: req.staffUser.organizationId, locationId, customerName, customerPhone,
+      ratePerDayMinor: resolvedRateMinor, pricingUnit, maxDays,
       currency: location.currency, expectedPickupAt, notes,
       orderCode: generateEntityCode('LUG-ORD'),
       createdByStaffId: req.staffUser._id, shiftInstanceId: req.shiftInstance._id, deviceId: req.device._id,
@@ -73,7 +92,7 @@ const createOrder = async (req, res, next) => {
 
     await auditLog.record(req, {
       action: 'LUGGAGE_ORDER_CREATED', entityType: 'LuggageOrder', entityId: order._id,
-      newValue: { customerName, customerPhone, ratePerDayMinor }, locationId, shiftInstanceId: req.shiftInstance._id,
+      newValue: { customerName, customerPhone, ratePerDayMinor: resolvedRateMinor, pricingUnit }, locationId, shiftInstanceId: req.shiftInstance._id,
     })
 
     res.status(201).json({ success: true, message: 'Luggage order created', data: { order } })

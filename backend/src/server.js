@@ -72,6 +72,7 @@ app.use('/audit-logs', require('./routes/audit.routes'))
 app.use('/anomalies', require('./routes/anomaly.routes'))
 app.use('/incidents', require('./routes/incident.routes'))
 app.use('/reports', require('./routes/report.routes'))
+app.use('/search', require('./routes/search.routes'))
 app.use('/notifications', require('./routes/notification.routes'))
 app.use('/public/:orgCode', require('./routes/publicSelfService.routes'))
 

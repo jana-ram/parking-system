@@ -129,6 +129,40 @@ describe('C0b: summary CSV export', () => {
   })
 })
 
+describe('C0c: summary XLSX export (format=xlsx)', () => {
+  test('GET /reports/summary/export?format=xlsx returns a real, readable .xlsx workbook', async () => {
+    const code = 'recon-export-xlsx'
+    await onboardOrg(app, { platformToken, code, countryId, adminPhone: '9700000042' })
+    const { token: adminToken } = await staffLogin(app, code, '9700000042', 'Admin@123')
+    const deviceUuid = 'device-recon-export-xlsx'
+    const deviceSecret = await registerDevice(app, adminToken, deviceUuid)
+
+    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const to = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    const res = await signedReq(app, 'get', '/reports/summary/export', { token: adminToken, deviceUuid, deviceSecret, query: { from, to, format: 'xlsx' } }).buffer(true).parse((response, callback) => {
+      const chunks = []
+      response.on('data', (chunk) => chunks.push(chunk))
+      response.on('end', () => callback(null, Buffer.concat(chunks)))
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toMatch(/spreadsheetml/)
+    expect(res.headers['content-disposition']).toContain('.xlsx')
+
+    // Prove the bytes are a real, parseable workbook, not just a mislabeled
+    // CSV — round-trip it through exceljs itself.
+    const ExcelJS = require('exceljs')
+    const workbook = new ExcelJS.Workbook()
+    await workbook.xlsx.load(res.body)
+    const sheet = workbook.getWorksheet('Summary')
+    expect(sheet).toBeDefined()
+    const headerRow = sheet.getRow(1).values.filter(Boolean)
+    expect(headerRow).toContain('Module')
+    const moduleColumn = sheet.getColumn(1).values.filter(Boolean)
+    expect(moduleColumn).toContain('Parking')
+    expect(moduleColumn).toContain('TOTAL')
+  })
+})
+
 describe('C1: shift transaction drill-down', () => {
   test('GET /reports/shifts/:id/transactions lists the sessions + payments under that shift', async () => {
     const code = 'recon-drilldown'

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose')
+const ExcelJS = require('exceljs')
 const ParkingSession = require('../models/ParkingSession')
 const Payment = require('../models/Payment')
 const ShiftInstance = require('../models/ShiftInstance')
@@ -23,6 +24,35 @@ function toCsv(rows, columns) {
   const header = columns.map((c) => escape(c.label)).join(',')
   const lines = rows.map((row) => columns.map((c) => escape(c.value(row))).join(','))
   return [header, ...lines].join('\n')
+}
+
+// §6/§34: real .xlsx generation via exceljs (server-side — no native/mobile
+// risk, and specifically NOT the `xlsx`/SheetJS package, which was already
+// evaluated and rejected earlier for an unpatched high-severity vulnerability,
+// GHSA-4r6h-8v6p-xvw6). Reuses the exact same `columns` definitions every CSV
+// export already has — one `{label, value(row)}` list serializes to both
+// formats, so the two never drift out of sync with each other.
+async function toXlsxBuffer(rows, columns, sheetName = 'Sheet1') {
+  const workbook = new ExcelJS.Workbook()
+  const sheet = workbook.addWorksheet(sheetName)
+  sheet.columns = columns.map((c) => ({ header: c.label, key: c.label, width: Math.max(12, c.label.length + 4) }))
+  sheet.getRow(1).font = { bold: true }
+  for (const row of rows) {
+    sheet.addRow(columns.map((c) => c.value(row)))
+  }
+  return workbook.xlsx.writeBuffer()
+}
+
+function sendXlsx(res, buffer, filename) {
+  res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  res.set('Content-Disposition', `attachment; filename="${filename}"`)
+  res.send(Buffer.from(buffer))
+}
+
+// req.query.format === 'xlsx' opts into a real spreadsheet instead of CSV on
+// every export endpoint below — same rows/columns either way.
+function wantsXlsx(req) {
+  return req.query.format === 'xlsx'
 }
 
 // Merges N `{ _id: method, totalMinor, count }` aggregation result arrays
@@ -265,8 +295,7 @@ const getStaffCollection = async (req, res, next) => {
 const exportStaffCollectionCsv = async (req, res, next) => {
   try {
     const rows = await buildStaffCollectionRows(req)
-
-    const csv = toCsv(rows, [
+    const columns = [
       { label: 'Shift ID', value: (r) => r.shiftInstanceId },
       { label: 'Staff', value: (r) => r.staffName },
       { label: 'Location', value: (r) => r.locationName },
@@ -280,11 +309,15 @@ const exportStaffCollectionCsv = async (req, res, next) => {
       { label: 'Actual Cash (minor)', value: (r) => r.actualCashMinor },
       { label: 'Variance (minor)', value: (r) => r.varianceMinor },
       { label: 'Mismatch Reason', value: (r) => r.mismatchReason },
-    ])
+    ]
 
+    if (wantsXlsx(req)) {
+      const buffer = await toXlsxBuffer(rows, columns, 'Staff Collection')
+      return sendXlsx(res, buffer, 'staff-collection.xlsx')
+    }
     res.set('Content-Type', 'text/csv')
     res.set('Content-Disposition', 'attachment; filename="staff-collection.csv"')
-    res.send(csv)
+    res.send(toCsv(rows, columns))
   } catch (err) {
     next(err)
   }
@@ -379,7 +412,7 @@ const exportShiftTransactionsCsv = async (req, res, next) => {
       ...parcelTransactions.map((t) => ({ ...t, paymentAmountMinor: t.amountMinor })),
     ]
 
-    const csv = toCsv(rows, [
+    const columns = [
       { label: 'Module', value: (r) => r.module },
       { label: 'Reference', value: (r) => r.vehicleNumber ?? r.orderCode ?? r.sessionId ?? '' },
       { label: 'Customer', value: (r) => r.customerName ?? r.receiverName ?? '' },
@@ -388,11 +421,15 @@ const exportShiftTransactionsCsv = async (req, res, next) => {
       { label: 'Amount (minor units)', value: (r) => r.paymentAmountMinor ?? '' },
       { label: 'Amount', value: (r) => (r.paymentAmountMinor != null ? (r.paymentAmountMinor / 100).toFixed(2) : '') },
       { label: 'Recorded At', value: (r) => r.createdAt?.toISOString?.() ?? r.createdAt ?? '' },
-    ])
+    ]
 
+    if (wantsXlsx(req)) {
+      const buffer = await toXlsxBuffer(rows, columns, 'Shift Transactions')
+      return sendXlsx(res, buffer, 'shift-transactions.xlsx')
+    }
     res.set('Content-Type', 'text/csv')
     res.set('Content-Disposition', 'attachment; filename="shift-transactions.csv"')
-    res.send(csv)
+    res.send(toCsv(rows, columns))
   } catch (err) {
     next(err)
   }
@@ -440,7 +477,7 @@ const exportCorrectionsCsv = async (req, res, next) => {
     const corrections = await Correction.find(filter).sort({ createdAt: -1 }).limit(500)
       .populate({ path: 'requestedBy', select: 'name', match: { organizationId: req.staffUser.organizationId } })
 
-    const csv = toCsv(corrections, [
+    const columns = [
       { label: 'Entity Type', value: (r) => r.entityType },
       { label: 'Entity ID', value: (r) => r.entityId },
       { label: 'Field', value: (r) => r.field },
@@ -449,11 +486,15 @@ const exportCorrectionsCsv = async (req, res, next) => {
       { label: 'Reason', value: (r) => r.reason },
       { label: 'Requested By', value: (r) => r.requestedBy?.name ?? '' },
       { label: 'Recorded At', value: (r) => r.createdAt?.toISOString?.() ?? r.createdAt },
-    ])
+    ]
 
+    if (wantsXlsx(req)) {
+      const buffer = await toXlsxBuffer(corrections, columns, 'Corrections')
+      return sendXlsx(res, buffer, 'corrections.xlsx')
+    }
     res.set('Content-Type', 'text/csv')
     res.set('Content-Disposition', 'attachment; filename="corrections.csv"')
-    res.send(csv)
+    res.send(toCsv(corrections, columns))
   } catch (err) {
     next(err)
   }
@@ -476,16 +517,20 @@ const exportSummaryCsv = async (req, res, next) => {
       { module: 'TOTAL', revenueMinor: summary.totalRevenueMinor, detail: '' },
     ]
 
-    const csv = toCsv(rows, [
+    const columns = [
       { label: 'Module', value: (r) => r.module },
       { label: 'Revenue (minor units)', value: (r) => r.revenueMinor },
       { label: 'Revenue', value: (r) => (r.revenueMinor / 100).toFixed(2) },
       { label: 'Detail', value: (r) => r.detail },
-    ])
+    ]
 
+    if (wantsXlsx(req)) {
+      const buffer = await toXlsxBuffer(rows, columns, 'Summary')
+      return sendXlsx(res, buffer, 'summary-report.xlsx')
+    }
     res.set('Content-Type', 'text/csv')
     res.set('Content-Disposition', 'attachment; filename="summary-report.csv"')
-    res.send(csv)
+    res.send(toCsv(rows, columns))
   } catch (err) {
     next(err)
   }

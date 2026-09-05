@@ -72,14 +72,27 @@ const getSummary = async (req, res, next) => {
       parcelPaymentStats, parcelOrderCounts, parcelOverdueStats,
     ] = await Promise.all([
       ParkingSession.aggregateScoped(organizationId, [{ $match: sessionMatch }, { $count: 'count' }]),
-      ParkingSession.aggregateScoped(organizationId, [{ $match: { ...sessionMatch, status: 'COMPLETED' } }, { $count: 'count' }]),
+      // Exit count must key off exitAt, not entryAt (sessionMatch) — a
+      // vehicle that entered yesterday and exits today was previously
+      // invisible to both days' "Exited" count (and would wrongly count
+      // under yesterday's range once it did exit). This now matches how
+      // ShiftTally's entriesCount/exitsCount are already correctly split by
+      // which shift the event happened in (shift.service.js:46-47).
+      ParkingSession.aggregateScoped(organizationId, [
+        { $match: { exitAt: { $gte: fromDate, $lte: toDate }, status: 'COMPLETED', ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $count: 'count' },
+      ]),
       ParkingSession.aggregateScoped(organizationId, [{ $match: sessionMatch }, { $group: { _id: '$vehicleTypeId', count: { $sum: 1 } } }]),
       // Payment carries no locationId of its own (only parkingSessionId) —
       // when a locationId filter is given, join through ParkingSession to
       // apply it; skip the (more expensive) $lookup entirely for the common
       // org-wide-report case where it isn't needed.
+      // PARTIALLY_PAID is real cash/UPI/card already collected on a session
+      // not yet fully settled — excluding it (as this did before) undercounts
+      // actual revenue relative to Staff Collection's tally, which already
+      // includes it (shift.service.js's computeTally, `$in: ['PAID','PARTIALLY_PAID']`).
       Payment.aggregateScoped(organizationId, [
-        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, status: 'PAID' } },
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, status: { $in: ['PAID', 'PARTIALLY_PAID'] } } },
         ...(locationObjectId ? [
           { $lookup: { from: 'parkingsessions', localField: 'parkingSessionId', foreignField: '_id', as: 'session' } },
           { $unwind: '$session' },
@@ -87,27 +100,33 @@ const getSummary = async (req, res, next) => {
         ] : []),
         { $group: { _id: '$method', totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
       ]),
+      // status: 'PAID' — dormant today (no Luggage/Parcel refund flow exists
+      // yet), added proactively so revenue doesn't start silently including
+      // REFUNDED amounts the moment one ships, matching Parking's own filter.
       LuggagePayment.aggregateScoped(organizationId, [
-        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, status: 'PAID', ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
         { $group: { _id: '$method', totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
       ]),
+      // Live snapshot, not date-range-scoped — same reasoning as overdueCount
+      // below and "Currently Parked": how many orders are ACTIVE/COMPLETED
+      // right now shouldn't change just because the report's date filter
+      // does (this previously counted orders CREATED in-range, grouped by
+      // their CURRENT status, which made "Luggage Active" swing with the
+      // date picker even though nothing about which orders are open changed).
       LuggageOrder.aggregateScoped(organizationId, [
-        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $match: { ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
-      // Overdue is a right-now snapshot (same idea as "Currently Parked"),
-      // not scoped to the from/to range — a customer's item doesn't stop
-      // being overdue just because the report window ended yesterday.
       LuggageOrder.aggregateScoped(organizationId, [
         { $match: { status: 'ACTIVE', expectedPickupAt: { $lt: now }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
         { $count: 'count' },
       ]),
       ParcelPayment.aggregateScoped(organizationId, [
-        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, status: 'PAID', ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
         { $group: { _id: '$method', totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
       ]),
       ParcelOrder.aggregateScoped(organizationId, [
-        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $match: { ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
       ParcelOrder.aggregateScoped(organizationId, [

@@ -146,8 +146,14 @@ const listActiveSessions = async (req, res, next) => {
   try {
     const filter = { organizationId: req.staffUser.organizationId, status: { $nin: ParkingSession.TERMINAL_STATUSES } }
     if (req.query.locationId) filter.locationId = req.query.locationId
-    const sessions = await ParkingSession.find(filter).sort({ entryAt: -1 }).limit(200)
-    res.json({ success: true, message: 'ok', data: { sessions } })
+    // `count` is a real countDocuments, independent of the .limit(200) below
+    // — the "Currently Parked" KPI reads this, not sessions.length, so a lot
+    // with >200 concurrently-parked vehicles doesn't silently freeze at 200.
+    const [sessions, count] = await Promise.all([
+      ParkingSession.find(filter).sort({ entryAt: -1 }).limit(200),
+      ParkingSession.countDocuments(filter),
+    ])
+    res.json({ success: true, message: 'ok', data: { sessions, count } })
   } catch (err) {
     next(err)
   }

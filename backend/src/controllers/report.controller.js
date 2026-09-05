@@ -1,5 +1,6 @@
 const mongoose = require('mongoose')
 const ExcelJS = require('exceljs')
+const RackSlot = require('../models/RackSlot')
 const ParkingSession = require('../models/ParkingSession')
 const Payment = require('../models/Payment')
 const ShiftInstance = require('../models/ShiftInstance')
@@ -100,6 +101,7 @@ const getSummary = async (req, res, next) => {
       entryStats, exitStats, byVehicleType, parkingPaymentStats,
       luggagePaymentStats, luggageOrderCounts, luggageOverdueStats,
       parcelPaymentStats, parcelOrderCounts, parcelOverdueStats,
+      parkingCancelledStats, parkingRefundStats, luggageRefundStats, parcelRefundStats, rackSlotStats,
     ] = await Promise.all([
       ParkingSession.aggregateScoped(organizationId, [{ $match: sessionMatch }, { $count: 'count' }]),
       // Exit count must key off exitAt, not entryAt (sessionMatch) — a
@@ -163,6 +165,33 @@ const getSummary = async (req, res, next) => {
         { $match: { status: 'ACTIVE', expectedPickupAt: { $lt: now }, ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
         { $count: 'count' },
       ]),
+      // Cancelled Parking sessions were never counted anywhere in this
+      // summary before — scoped by entryAt like "Entered", since a
+      // cancellation is a variant of an entry event, not a separate one.
+      ParkingSession.aggregateScoped(organizationId, [{ $match: { ...sessionMatch, status: 'CANCELLED' } }, { $count: 'count' }]),
+      // Refunds — dormant today (no refund-issuing action exists anywhere in
+      // the app yet for any module), added so the Reports screen has a real,
+      // correctly-wired place to show them the moment a refund flow ships,
+      // rather than needing new aggregation work added later.
+      Payment.aggregateScoped(organizationId, [
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, status: 'REFUNDED' } },
+        { $group: { _id: null, totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
+      ]),
+      LuggagePayment.aggregateScoped(organizationId, [
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, status: 'REFUNDED', ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $group: { _id: null, totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
+      ]),
+      ParcelPayment.aggregateScoped(organizationId, [
+        { $match: { createdAt: { $gte: fromDate, $lte: toDate }, status: 'REFUNDED', ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $group: { _id: null, totalMinor: { $sum: '$amountMinor' }, count: { $sum: 1 } } },
+      ]),
+      // Rack occupancy — a live snapshot (like "Currently Parked"), not
+      // date-range-scoped: how many slots are occupied right now doesn't
+      // depend on the report's date filter.
+      RackSlot.aggregateScoped(organizationId, [
+        { $match: { ...(locationObjectId ? { locationId: locationObjectId } : {}) } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
     ])
 
     const totalOf = (rows) => rows.reduce((sum, r) => sum + r.totalMinor, 0)
@@ -185,10 +214,26 @@ const getSummary = async (req, res, next) => {
         // Parcel" report filter can switch what it displays without a
         // separate round-trip per type.
         byModule: {
-          parking: { revenueMinor: parkingRevenueMinor, vehiclesEntered: entryStats[0]?.count ?? 0, vehiclesExited: exitStats[0]?.count ?? 0, revenueByMethod: mergeByMethod(parkingPaymentStats) },
-          luggage: { revenueMinor: luggageRevenueMinor, orders: countsOf(luggageOrderCounts), overdueCount: luggageOverdueStats[0]?.count ?? 0, revenueByMethod: mergeByMethod(luggagePaymentStats) },
-          parcel: { revenueMinor: parcelRevenueMinor, orders: countsOf(parcelOrderCounts), overdueCount: parcelOverdueStats[0]?.count ?? 0, revenueByMethod: mergeByMethod(parcelPaymentStats) },
+          parking: {
+            revenueMinor: parkingRevenueMinor, vehiclesEntered: entryStats[0]?.count ?? 0, vehiclesExited: exitStats[0]?.count ?? 0,
+            cancelledCount: parkingCancelledStats[0]?.count ?? 0, refundsMinor: parkingRefundStats[0]?.totalMinor ?? 0, refundsCount: parkingRefundStats[0]?.count ?? 0,
+            revenueByMethod: mergeByMethod(parkingPaymentStats),
+          },
+          luggage: {
+            revenueMinor: luggageRevenueMinor, orders: countsOf(luggageOrderCounts), overdueCount: luggageOverdueStats[0]?.count ?? 0,
+            refundsMinor: luggageRefundStats[0]?.totalMinor ?? 0, refundsCount: luggageRefundStats[0]?.count ?? 0,
+            revenueByMethod: mergeByMethod(luggagePaymentStats),
+          },
+          parcel: {
+            revenueMinor: parcelRevenueMinor, orders: countsOf(parcelOrderCounts), overdueCount: parcelOverdueStats[0]?.count ?? 0,
+            refundsMinor: parcelRefundStats[0]?.totalMinor ?? 0, refundsCount: parcelRefundStats[0]?.count ?? 0,
+            revenueByMethod: mergeByMethod(parcelPaymentStats),
+          },
         },
+        // A live snapshot of rack slot status (like "Currently Parked"),
+        // present even when RACK is disabled (just all-zero) — see
+        // RackSlot.aggregateScoped's header comment above.
+        rackOccupancy: countsOf(rackSlotStats),
         // Kept at top level too — existing callers (mobile ReportsScreen)
         // already read these two fields directly.
         vehiclesEntered: entryStats[0]?.count ?? 0,
@@ -511,16 +556,18 @@ const exportSummaryCsv = async (req, res, next) => {
     })
 
     const rows = [
-      { module: 'Parking', revenueMinor: summary.byModule.parking.revenueMinor, detail: `${summary.byModule.parking.vehiclesEntered} entered / ${summary.byModule.parking.vehiclesExited} exited` },
-      { module: 'Luggage', revenueMinor: summary.byModule.luggage.revenueMinor, detail: `${JSON.stringify(summary.byModule.luggage.orders)} · ${summary.byModule.luggage.overdueCount} overdue` },
-      { module: 'Parcel', revenueMinor: summary.byModule.parcel.revenueMinor, detail: `${JSON.stringify(summary.byModule.parcel.orders)} · ${summary.byModule.parcel.overdueCount} overdue` },
-      { module: 'TOTAL', revenueMinor: summary.totalRevenueMinor, detail: '' },
+      { module: 'Parking', revenueMinor: summary.byModule.parking.revenueMinor, detail: `${summary.byModule.parking.vehiclesEntered} entered / ${summary.byModule.parking.vehiclesExited} exited / ${summary.byModule.parking.cancelledCount} cancelled`, refundsMinor: summary.byModule.parking.refundsMinor },
+      { module: 'Luggage', revenueMinor: summary.byModule.luggage.revenueMinor, detail: `${JSON.stringify(summary.byModule.luggage.orders)} · ${summary.byModule.luggage.overdueCount} overdue`, refundsMinor: summary.byModule.luggage.refundsMinor },
+      { module: 'Parcel', revenueMinor: summary.byModule.parcel.revenueMinor, detail: `${JSON.stringify(summary.byModule.parcel.orders)} · ${summary.byModule.parcel.overdueCount} overdue`, refundsMinor: summary.byModule.parcel.refundsMinor },
+      { module: 'Rack (live)', revenueMinor: null, detail: JSON.stringify(summary.rackOccupancy), refundsMinor: null },
+      { module: 'TOTAL', revenueMinor: summary.totalRevenueMinor, detail: '', refundsMinor: summary.byModule.parking.refundsMinor + summary.byModule.luggage.refundsMinor + summary.byModule.parcel.refundsMinor },
     ]
 
     const columns = [
       { label: 'Module', value: (r) => r.module },
-      { label: 'Revenue (minor units)', value: (r) => r.revenueMinor },
-      { label: 'Revenue', value: (r) => (r.revenueMinor / 100).toFixed(2) },
+      { label: 'Revenue (minor units)', value: (r) => r.revenueMinor ?? '' },
+      { label: 'Revenue', value: (r) => (r.revenueMinor != null ? (r.revenueMinor / 100).toFixed(2) : '') },
+      { label: 'Refunds', value: (r) => (r.refundsMinor != null ? (r.refundsMinor / 100).toFixed(2) : '') },
       { label: 'Detail', value: (r) => r.detail },
     ]
 

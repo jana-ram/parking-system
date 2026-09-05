@@ -59,7 +59,8 @@ afterAll(async () => {
 })
 
 async function setUpParkingOrg(code, adminPhone) {
-  await onboardOrg(app, { platformToken, code, countryId, adminPhone })
+  const org = await onboardOrg(app, { platformToken, code, countryId, adminPhone })
+  const orgId = org.organization._id
   const { token: adminToken } = await staffLogin(app, code, adminPhone, 'Admin@123')
   const deviceUuid = `device-${code}`
   const deviceSecret = await registerDevice(app, adminToken, deviceUuid)
@@ -77,7 +78,7 @@ async function setUpParkingOrg(code, adminPhone) {
   })
   await signedReq(app, 'post', '/shifts/start', { token: adminToken, deviceUuid, deviceSecret, body: { locationId, openingCashMinor: 0 } })
 
-  return { adminToken, deviceUuid, deviceSecret, locationId, vehicleTypeId }
+  return { orgId, adminToken, deviceUuid, deviceSecret, locationId, vehicleTypeId }
 }
 
 describe('C0: "Vehicles Exited" now keys off exitAt, not entryAt', () => {
@@ -215,5 +216,82 @@ describe('C3: "Currently Parked" and "Open Alerts" expose a real count, not a ca
     const res = await signedReq(app, 'get', '/incidents', { token: adminToken, deviceUuid, deviceSecret, query: { status: 'OPEN' } })
     expect(res.status).toBe(200)
     expect(res.body.data.count).toBe(res.body.data.incidents.length)
+  });
+});
+
+describe('C4: Reports expansion — Cancelled, Refunds, Rack occupancy', () => {
+  test('a cancelled Parking session is counted in byModule.parking.cancelledCount', async () => {
+    const ctx = await setUpParkingOrg('kpi-cancelled', '9900000006')
+    const tokenRes = await signedReq(app, 'post', '/tokens/batches', { token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret, body: { locationId: ctx.locationId, batchSize: 1 } })
+    const tokenCode = tokenRes.body.data.tokens[0].tokenCode
+    const entryRes = await signedReq(app, 'post', '/sessions/entry', {
+      token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret,
+      body: { clientTransactionId: 'ctx-kpi-cancel-entry', locationId: ctx.locationId, vehicleNumber: 'KA05CN0001', vehicleTypeId: ctx.vehicleTypeId, tokenCode, locationCheck: goodLocationCheck() },
+    })
+    const sessionId = entryRes.body.data.sessionId
+
+    const cancelRes = await signedReq(app, 'post', `/sessions/${sessionId}/cancel`, {
+      token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret, body: { reason: 'Entered by mistake' },
+    })
+    expect(cancelRes.status).toBe(200)
+
+    const from = new Date(Date.now() - 60000).toISOString()
+    const to = new Date(Date.now() + 60000).toISOString()
+    const summaryRes = await signedReq(app, 'get', '/reports/summary', { token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret, query: { from, to } })
+    expect(summaryRes.body.data.byModule.parking.cancelledCount).toBe(1)
+  });
+
+  test('a REFUNDED payment (however it gets there) is counted in refundsMinor, not revenue', async () => {
+    const ctx = await setUpParkingOrg('kpi-refund', '9900000007')
+    const tokenRes = await signedReq(app, 'post', '/tokens/batches', { token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret, body: { locationId: ctx.locationId, batchSize: 1 } })
+    const tokenCode = tokenRes.body.data.tokens[0].tokenCode
+    const entryRes = await signedReq(app, 'post', '/sessions/entry', {
+      token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret,
+      body: { clientTransactionId: 'ctx-kpi-refund-entry', locationId: ctx.locationId, vehicleNumber: 'KA05RF0001', vehicleTypeId: ctx.vehicleTypeId, tokenCode, locationCheck: goodLocationCheck() },
+    })
+    const sessionId = entryRes.body.data.sessionId
+    const exitRes = await signedReq(app, 'post', `/sessions/${sessionId}/exit/request`, {
+      token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret, body: { tokenCode, exitAt: new Date().toISOString(), locationCheck: goodLocationCheck() },
+    })
+    const amountDueMinor = exitRes.body.data.amountDueMinor
+    await signedReq(app, 'post', `/sessions/${sessionId}/payment`, {
+      token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret, body: { clientTransactionId: 'ctx-kpi-refund-pay', method: 'CASH', amountMinor: amountDueMinor },
+    })
+
+    // No refund-issuing endpoint exists anywhere in the app yet (confirmed:
+    // no service writes status:'REFUNDED') — writing it directly is the only
+    // way to prove the aggregation itself is correct and ready for when one ships.
+    const Payment = require('../models/Payment')
+    await Payment.updateOne({ organizationId: ctx.orgId, parkingSessionId: sessionId }, { $set: { status: 'REFUNDED' } })
+
+    const from = new Date(Date.now() - 60000).toISOString()
+    const to = new Date(Date.now() + 60000).toISOString()
+    const summaryRes = await signedReq(app, 'get', '/reports/summary', { token: ctx.adminToken, deviceUuid: ctx.deviceUuid, deviceSecret: ctx.deviceSecret, query: { from, to } })
+    expect(summaryRes.body.data.byModule.parking.refundsMinor).toBe(amountDueMinor)
+    expect(summaryRes.body.data.byModule.parking.refundsCount).toBe(1)
+    // The now-refunded payment must no longer count as revenue.
+    expect(summaryRes.body.data.byModule.parking.revenueMinor).toBe(0)
+  });
+
+  test('rackOccupancy is a live snapshot of RackSlot statuses', async () => {
+    const code = 'kpi-rack'
+    const org = await onboardOrg(app, { platformToken, code, countryId, adminPhone: '9900000008' })
+    await enableModules(org.organization._id, { RACK: true })
+    const { token: adminToken } = await staffLogin(app, code, '9900000008', 'Admin@123')
+    const deviceUuid = `device-${code}`
+    const deviceSecret = await registerDevice(app, adminToken, deviceUuid)
+    const locRes = await signedReq(app, 'post', '/locations', {
+      token: adminToken, deviceUuid, deviceSecret,
+      body: { countryId, name: `${code} Lot`, geo: GOOD_GEO, timezone: 'Asia/Kolkata', currency: 'INR', geofenceRadiusM: 150 },
+    })
+    const locationId = locRes.body.data.location._id
+    const rackRes = await signedReq(app, 'post', '/racks', { token: adminToken, deviceUuid, deviceSecret, body: { locationId, code: 'R1' } })
+    const rackId = rackRes.body.data.rack._id
+    await signedReq(app, 'post', `/racks/${rackId}/slots`, { token: adminToken, deviceUuid, deviceSecret, body: { slots: [{ slotCode: 'R1-A1' }, { slotCode: 'R1-A2' }] } })
+
+    const from = new Date(Date.now() - 60000).toISOString()
+    const to = new Date(Date.now() + 60000).toISOString()
+    const summaryRes = await signedReq(app, 'get', '/reports/summary', { token: adminToken, deviceUuid, deviceSecret, query: { from, to } })
+    expect(summaryRes.body.data.rackOccupancy.AVAILABLE).toBe(2)
   });
 });
